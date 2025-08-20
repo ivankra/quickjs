@@ -1,3 +1,4 @@
+CONFIG_CLANG=y
 #
 # QuickJS Javascript Engine
 #

@@ -56,13 +56,15 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
 #if TAIL_DISPATCH
 #define HANDLER(op)          PRESERVE_NONE static JSValue handle_##op(TAIL_CALL_PARAMS)
 #define HANDLER_FALLTHROUGH(op, op2)  \
-                             HANDLER(op) { \
-                                 MUSTTAIL return jsci_jump_table[op2](TAIL_CALL_ARGS(pc)); \
-                             }
-#define BREAK                MUSTTAIL return jsci_jump_table[*ip](TAIL_CALL_ARGS(pc+1))
+    HANDLER(op) { MUSTTAIL return jsci_jump_table[op2](TAIL_CALL_ARGS(pc)); }
+#define BREAK                MUSTTAIL return jsci_jump_table[*pc](TAIL_CALL_ARGS(pc+1))
 #define GOTO_EXCEPTION       MUSTTAIL return jsci_exception(TAIL_CALL_ARGS(pc))
 #define GOTO_DONE            MUSTTAIL return jsci_done(TAIL_CALL_ARGS(pc))
 #define GOTO_DONE_GENERATOR  MUSTTAIL return jsci_done_generator(TAIL_CALL_ARGS(pc))
+#define BEGIN_HANDLERS \
+    restart: return jsci_jump_table[*pc](TAIL_CALL_ARGS(pc+1)); \
+    exception: return jsci_exception(TAIL_CALL_ARGS(pc)); \
+    }  /* end JS_CallInternal */
 
 #elif !DIRECT_DISPATCH
 #define SWITCH(pc)      switch (*pc++)
@@ -180,7 +182,9 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
 
 /*****************************************************************************/
 
-#if !TAIL_DISPATCH
+#if TAIL_DISPATCH
+BEGIN_HANDLERS
+#else
 restart:
     for(;;) {
         SWITCH(pc) {

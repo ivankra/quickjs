@@ -80,7 +80,6 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
     const uint8_t *pc;
     int arg_allocated_size, i;
     JSValue *stack_buf, *var_buf, *arg_buf, *sp, *pval;
-    JSVarRef **var_refs;
     size_t alloca_size;
 
 #if TAIL_DISPATCH
@@ -136,9 +135,8 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
             sf->b = b;
             sf->cpool = b->cpool;
             ctx = b->realm;
-            var_refs = p->u.func.var_refs;
+            sf->var_refs = p->u.func.var_refs;
             sf->local_buf = arg_buf = sf->arg_buf;
-            sf->var_refs = var_refs;
             var_buf = sf->var_buf;
             stack_buf = sf->var_buf + b->var_count;
             sp = sf->cur_sp;
@@ -183,8 +181,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
     sf->arg_count = argc;
     sf->cur_func = (JSValue)func_obj;
     init_list_head(&sf->var_ref_list);
-    var_refs = p->u.func.var_refs;
-    sf->var_refs = var_refs;
+    sf->var_refs = p->u.func.var_refs;
 
     sf->local_buf = alloca(alloca_size);
     if (unlikely(arg_allocated_size)) {

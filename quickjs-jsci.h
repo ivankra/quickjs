@@ -37,7 +37,14 @@
     JSValue *argv, \
     int flags
 
+#if TAIL_DISPATCH
 #define END_BRACE }
+PRESERVE_NONE static JSValue jsci_label_exception(TAIL_CALL_PARAMS);
+PRESERVE_NONE static JSValue jsci_label_done(TAIL_CALL_PARAMS);
+PRESERVE_NONE static JSValue jsci_label_done_generator(TAIL_CALL_PARAMS);
+typedef PRESERVE_NONE JSValue(*JSHandler)(TAIL_CALL_PARAMS);
+extern JSHandler jsci_jump_table[];
+#endif
 
 /* argv[] is modified if (flags & JS_CALL_FLAG_COPY_ARGV) = 0. */
 static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
@@ -51,7 +58,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
     JSStackFrame sf_s, *sf = &sf_s;
     const uint8_t *pc;
     int arg_allocated_size, i;
-    JSValue *local_buf, *stack_buf, *var_buf, *arg_buf, *sp, ret_val, *pval;
+    JSValue *local_buf, *stack_buf, *var_buf, *arg_buf, *sp, ret_val = JS_UNDEFINED, *pval;
     JSVarRef **var_refs;
     size_t alloca_size;
 
@@ -61,11 +68,11 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
     HANDLER(op) { MUSTTAIL return jsci_jump_table[op2](TAIL_CALL_ARGS(pc)); }
 #define BREAK                MUSTTAIL return jsci_jump_table[*pc](TAIL_CALL_ARGS(pc+1))
 #define DEFAULT
-#define GOTO_LABEL(name)     MUSTTAIL return jsci_##name(TAIL_CALL_ARGS(pc))
-#define LABEL_HANDLER(name)  PRESERVE_NONE static JSValue jsci_##name(TAIL_CALL_PARAMS)
+#define GOTO_LABEL(name)     MUSTTAIL return jsci_label_##name(TAIL_CALL_ARGS(pc))
+#define LABEL_HANDLER(name)  PRESERVE_NONE static JSValue jsci_label_##name(TAIL_CALL_PARAMS)
 #define BEGIN_HANDLERS \
     restart: return jsci_jump_table[*pc](TAIL_CALL_ARGS(pc+1)); \
-    exception: return jsci_exception(TAIL_CALL_ARGS(pc)); \
+    exception: return jsci_label_exception(TAIL_CALL_ARGS(pc)); \
     END_BRACE  /* end JS_CallInternal */
 
 #elif !DIRECT_DISPATCH
@@ -514,6 +521,7 @@ restart:
           {
             int opcode_ = pc[-1];
             int call_argc = opcode_ - OP_call0;
+            int i;
             JSValue *call_argv = sp - call_argc;
             sf->cur_pc = pc;
             ret_val = JS_CallInternal(ctx, call_argv[-1], JS_UNDEFINED,
@@ -943,24 +951,24 @@ restart:
         HANDLER(OP_check_define_var)
             {
                 JSAtom atom;
-                int flags;
+                int pc_flags;
                 atom = get_u32(pc);
-                flags = pc[4];
+                pc_flags = pc[4];
                 pc += 5;
                 sf->cur_pc = pc;
-                if (JS_CheckDefineGlobalVar(ctx, atom, flags))
+                if (JS_CheckDefineGlobalVar(ctx, atom, pc_flags))
                     GOTO_LABEL(exception);
                 BREAK;
             }
         HANDLER(OP_define_var)
             {
                 JSAtom atom;
-                int flags;
+                int pc_flags;
                 atom = get_u32(pc);
-                flags = pc[4];
+                pc_flags = pc[4];
                 pc += 5;
                 sf->cur_pc = pc;
-                if (JS_DefineGlobalVar(ctx, atom, flags))
+                if (JS_DefineGlobalVar(ctx, atom, pc_flags))
                     GOTO_LABEL(exception);
                 BREAK;
             }
@@ -1713,7 +1721,7 @@ restart:
                 JSValue getter, setter, value;
                 JSValueConst obj;
                 JSAtom atom;
-                int flags, ret, op_flags;
+                int js_flags, ret, op_flags;
                 BOOL is_computed;
 #define OP_DEFINE_METHOD_METHOD 0
 #define OP_DEFINE_METHOD_GETTER 1
@@ -1733,28 +1741,28 @@ restart:
                 op_flags = *pc++;
 
                 obj = sp[-2 - is_computed];
-                flags = JS_PROP_HAS_CONFIGURABLE | JS_PROP_CONFIGURABLE |
+                js_flags = JS_PROP_HAS_CONFIGURABLE | JS_PROP_CONFIGURABLE |
                     JS_PROP_HAS_ENUMERABLE | JS_PROP_THROW;
                 if (op_flags & OP_DEFINE_METHOD_ENUMERABLE)
-                    flags |= JS_PROP_ENUMERABLE;
+                    js_flags |= JS_PROP_ENUMERABLE;
                 op_flags &= 3;
                 value = JS_UNDEFINED;
                 getter = JS_UNDEFINED;
                 setter = JS_UNDEFINED;
                 if (op_flags == OP_DEFINE_METHOD_METHOD) {
                     value = sp[-1];
-                    flags |= JS_PROP_HAS_VALUE | JS_PROP_HAS_WRITABLE | JS_PROP_WRITABLE;
+                    js_flags |= JS_PROP_HAS_VALUE | JS_PROP_HAS_WRITABLE | JS_PROP_WRITABLE;
                 } else if (op_flags == OP_DEFINE_METHOD_GETTER) {
                     getter = sp[-1];
-                    flags |= JS_PROP_HAS_GET;
+                    js_flags |= JS_PROP_HAS_GET;
                 } else {
                     setter = sp[-1];
-                    flags |= JS_PROP_HAS_SET;
+                    js_flags |= JS_PROP_HAS_SET;
                 }
-                ret = js_method_set_properties(ctx, sp[-1], atom, flags, obj);
+                ret = js_method_set_properties(ctx, sp[-1], atom, js_flags, obj);
                 if (ret >= 0) {
                     ret = JS_DefineProperty(ctx, obj, atom, value,
-                                            getter, setter, flags);
+                                            getter, setter, js_flags);
                 }
                 JS_FreeValue(ctx, sp[-1]);
                 if (is_computed) {
@@ -2805,6 +2813,8 @@ restart:
 #if TAIL_DISPATCH
 LABEL_HANDLER(exception) {
     JSRuntime *rt = caller_ctx->rt;
+    JSValue *stack_buf = sf->var_buf + b->var_count;
+    JSValue *pval;
 #else
 exception:
 #endif
@@ -2843,12 +2853,14 @@ exception:
         GOTO_LABEL(done_generator);
     GOTO_LABEL(done);
 #if TAIL_DISPATCH
+  restart: return jsci_jump_table[*pc](TAIL_CALL_ARGS(pc+1));
 }
 #endif
 
 #if TAIL_DISPATCH
 LABEL_HANDLER(done) {
     JSRuntime *rt = caller_ctx->rt;
+    JSValue *pval;
 #else
 done:
 #endif

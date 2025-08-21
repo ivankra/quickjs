@@ -332,6 +332,8 @@ typedef struct JSStackFrame {
     /* only used in generators. Current stack pointer value. NULL if
        the function is running. */
     JSValue *cur_sp;
+
+    JSContext *caller_ctx;
     // Temps only used during interpreter loop
     JSValue ret_val;
 } JSStackFrame;

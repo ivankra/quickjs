@@ -16,7 +16,7 @@
 // Cold vars from: sf
 // Maybe move to stack frame: caller_ctx new_target flags
 #define TAIL_DISPATCH 1
-#define TAIL_CALL_ARGS(pc) pc, sp, b, ctx, var_buf, arg_buf, var_refs, sf, caller_ctx, this_obj, new_target, argc, argv, flags, local_buf
+#define TAIL_CALL_ARGS(pc) pc, sp, b, ctx, var_buf, arg_buf, var_refs, sf, this_obj, new_target, argc, argv, flags, local_buf
 #define TAIL_CALL_PARAMS \
     const uint8_t *pc, \
     JSValue *sp, \
@@ -26,7 +26,6 @@
     JSValue *arg_buf, \
     JSVarRef **var_refs, \
     JSStackFrame *sf, \
-    JSContext *caller_ctx, \
     JSValueConst this_obj, \
     JSValueConst new_target, \
     int argc, \
@@ -136,6 +135,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
             /* func_obj get contains a pointer to JSFuncAsyncState */
             /* the stack frame is already allocated */
             sf = &s->frame;
+            sf->caller_ctx = caller_ctx;
             p = JS_VALUE_GET_OBJ(sf->cur_func);
             b = p->u.func.function_bytecode;
             ctx = b->realm;
@@ -210,6 +210,9 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
     sf->prev_frame = rt->current_stack_frame;
     rt->current_stack_frame = sf;
     ctx = b->realm; /* set the current realm */
+
+    sf->caller_ctx = caller_ctx;
+
     goto restart;
 
 /*****************************************************************************/
@@ -694,7 +697,7 @@ restart:
             /* return TRUE if 'this' should be returned */
             if (!JS_IsObject(sp[-1])) {
                 if (!JS_IsUndefined(sp[-1])) {
-                    JS_ThrowTypeError(caller_ctx, "derived class constructor must return an object or undefined");
+                    JS_ThrowTypeError(sf->caller_ctx, "derived class constructor must return an object or undefined");
                     GOTO_LABEL(exception);
                 }
                 sp[0] = JS_TRUE;
@@ -1207,7 +1210,7 @@ restart:
                 idx = get_u16(pc);
                 pc += 2;
                 if (unlikely(JS_IsUninitialized(var_buf[idx]))) {
-                    JS_ThrowReferenceErrorUninitialized2(caller_ctx, b, idx, FALSE);
+                    JS_ThrowReferenceErrorUninitialized2(sf->caller_ctx, b, idx, FALSE);
                     GOTO_LABEL(exception);
                 }
                 sp[0] = JS_DupValue(ctx, var_buf[idx]);
@@ -2842,7 +2845,7 @@ restart:
 
 #if TAIL_DISPATCH
 LABEL_FUNC(exception) {
-    JSRuntime *rt = caller_ctx->rt;
+    JSRuntime *rt = sf->caller_ctx->rt;
     JSValue *stack_buf = sf->var_buf + b->var_count;
 #else
 exception:
@@ -2888,7 +2891,7 @@ exception:
 
 #if TAIL_DISPATCH
 LABEL_FUNC(done) {
-    JSRuntime *rt = caller_ctx->rt;
+    JSRuntime *rt = sf->caller_ctx->rt;
     JSValue *pval;
 #else
 done:
@@ -2901,7 +2904,7 @@ done:
     for(pval = local_buf; pval < sp; pval++) {
         JS_FreeValue(ctx, *pval);
     }
-    caller_ctx->rt->current_stack_frame = sf->prev_frame;
+    sf->caller_ctx->rt->current_stack_frame = sf->prev_frame;
     return sf->ret_val;
 #if TAIL_DISPATCH
 }
@@ -2909,7 +2912,7 @@ done:
 
 #if TAIL_DISPATCH
 LABEL_FUNC(done_generator) {
-    JSRuntime *rt = caller_ctx->rt;
+    JSRuntime *rt = sf->caller_ctx->rt;
 #else
 done_generator:
 #endif

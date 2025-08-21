@@ -42,6 +42,20 @@ PRESERVE_NONE static JSValue jsci_label_done(TAIL_CALL_PARAMS);
 PRESERVE_NONE static JSValue jsci_label_done_generator(TAIL_CALL_PARAMS);
 typedef PRESERVE_NONE JSValue(* const JSHandler)(TAIL_CALL_PARAMS);
 
+// Fallthough cases
+#define jsci_OP_call0 jsci_OP_call3
+#define jsci_OP_call1 jsci_OP_call3
+#define jsci_OP_call2 jsci_OP_call3
+#define jsci_OP_make_loc_ref jsci_OP_make_var_ref_ref
+#define jsci_OP_make_arg_ref jsci_OP_make_var_ref_ref
+#define jsci_OP_define_method jsci_OP_define_method_computed
+#define jsci_OP_define_class jsci_OP_define_class_computed
+#define jsci_OP_with_get_var jsci_OP_with_get_ref
+#define jsci_OP_with_put_var jsci_OP_with_get_ref
+#define jsci_OP_with_delete_var jsci_OP_with_get_ref
+#define jsci_OP_with_make_ref jsci_OP_with_get_ref
+#define jsci_OP_yield_star jsci_OP_async_yield_star
+
 #define DEF(id, size, n_pop, n_push, f) static PRESERVE_NONE JSValue jsci_OP_##id(TAIL_CALL_PARAMS);
 #if SHORT_OPCODES
 #define def(id, size, n_pop, n_push, f)
@@ -81,8 +95,8 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
 
 #if TAIL_DISPATCH
 #define CASE(op)          PRESERVE_NONE static JSValue jsci_##op(TAIL_CALL_PARAMS)
-#define CASE_FALLTHROUGH(op, target_op)  \
-    CASE(op) { MUSTTAIL return jsci_jump_table[target_op](TAIL_CALL_ARGS(pc)); }
+#define CASE_FALLTHROUGH(op, target_op)
+//    CASE(op) { MUSTTAIL return jsci_jump_table[target_op](TAIL_CALL_ARGS(pc)); }
 #define BREAK                MUSTTAIL return jsci_jump_table[*pc](TAIL_CALL_ARGS(pc+1))
 #define DEFAULT
 #define GOTO_LABEL(name)     MUSTTAIL return jsci_label_##name(TAIL_CALL_ARGS(pc))

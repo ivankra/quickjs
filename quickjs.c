@@ -333,11 +333,12 @@ typedef struct JSStackFrame {
        the function is running. */
     JSValue *cur_sp;
 
-    // Temps used during interpreter loop
+    // Temps used only during interpreter loop
     JSContext *caller_ctx;
     JSValue ret_val;
     JSValueConst this_obj;
     JSValueConst new_target;
+    JSValue* local_buf;
 } JSStackFrame;
 
 typedef enum {

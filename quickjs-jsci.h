@@ -44,7 +44,25 @@ PRESERVE_NONE static JSValue jsci_label_exception(TAIL_CALL_PARAMS);
 PRESERVE_NONE static JSValue jsci_label_done(TAIL_CALL_PARAMS);
 PRESERVE_NONE static JSValue jsci_label_done_generator(TAIL_CALL_PARAMS);
 typedef PRESERVE_NONE JSValue(*JSHandler)(TAIL_CALL_PARAMS);
-extern JSHandler jsci_jump_table[];
+
+#define DEF(id, size, n_pop, n_push, f) static PRESERVE_NONE JSValue jsci_##id(TAIL_CALL_PARAMS);
+#if SHORT_OPCODES
+#define def(id, size, n_pop, n_push, f)
+#else
+#define def(id, size, n_pop, n_push, f) static PRESERVE_NONE JSValue jsci_##id(TAIL_CALL_PARAMS);
+#endif
+#include "quickjs-opcode.h"
+
+static const JSHandler const jsci_jump_table[256] = {
+#define DEF(id, size, n_pop, n_push, f) jsci_##id,
+#if SHORT_OPCODES
+#define def(id, size, n_pop, n_push, f)
+#else
+#define def(id, size, n_pop, n_push, f) jsci_##id,
+#endif
+#include "quickjs-opcode.h"
+        [ OP_COUNT ... 255 ] = &&jsci_OP_invalid
+};
 #endif
 
 /* argv[] is modified if (flags & JS_CALL_FLAG_COPY_ARGV) = 0. */
@@ -64,7 +82,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
     size_t alloca_size;
 
 #if TAIL_DISPATCH
-#define HANDLER(op)          PRESERVE_NONE static JSValue handle_##op(TAIL_CALL_PARAMS)
+#define HANDLER(op)          PRESERVE_NONE static JSValue jsci_##op(TAIL_CALL_PARAMS)
 #define HANDLER_FALLTHROUGH(op, op2)  \
     HANDLER(op) { MUSTTAIL return jsci_jump_table[op2](TAIL_CALL_ARGS(pc)); }
 #define BREAK                MUSTTAIL return jsci_jump_table[*pc](TAIL_CALL_ARGS(pc+1))

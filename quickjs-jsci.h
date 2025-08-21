@@ -1,14 +1,26 @@
-// p = JS_VALUE_GET_OBJ(func_obj);
-// p = JS_VALUE_GET_OBJ(sf->cur_func);  from async_func_resume
+// Not needed in interpreter loop: func_obj rt p sf_s, arg_allocated_size i local_buf stack_buf pval alloca_size
+// First cold var: sf
+// Maybe move to stack frame: caller_ctx new_target flags
 //
-// b = p->u.func.function_bytecode;
-//
-// init/end: p alloca_size
-//
-//
+// Handle: ret_val, opcode
 
-#define TAIL_CALL_PARAMS const uint8_t *pc, JSValue *sp, JSFunctionBytecode *b
-#define TAIL_CALL_ARGS pc, sp, b
+#define TAIL_CALL_ARGS pc, sp, b, ctx, var_buf, arg_buf, var_refs, sf, caller_ctx, this_obj, new_target, argc, argv, flags
+#define TAIL_CALL_PARAMS \
+    const uint8_t *pc, \
+    JSValue *sp, \
+    JSFunctionBytecode *b, \
+    JSContext *ctx, \
+    JSValue *var_buf, \
+    JSValue *arg_buf, \
+    JSVarRef **var_refs, \
+    JSStackFrame *sf, \
+    JSContext *caller_ctx, \
+    JSValueConst this_obj, \
+    JSValueConst new_target, \
+    int argc, \
+    JSValue *argv, \
+    int flags
+
 
 /* argv[] is modified if (flags & JS_CALL_FLAG_COPY_ARGV) = 0. */
 static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
@@ -312,6 +324,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                     break;
                 case OP_SPECIAL_OBJECT_HOME_OBJECT:
                     {
+                        JSObject *p_ = JS_VALUE_GET_OBJ(sf->cur_func);
                         JSObject *p1;
                         p1 = p->u.func.home_object;
                         if (unlikely(!p1))
@@ -507,6 +520,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
         CASE(OP_call):
         CASE(OP_tail_call):
             {
+                int i;
                 call_argc = get_u16(pc);
                 pc += 2;
                 goto has_call_argc;
@@ -527,6 +541,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
             BREAK;
         CASE(OP_call_constructor):
             {
+                int i;
                 call_argc = get_u16(pc);
                 pc += 2;
                 call_argv = sp - call_argc;
@@ -545,6 +560,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
         CASE(OP_call_method):
         CASE(OP_tail_call_method):
             {
+                int i;
                 call_argc = get_u16(pc);
                 pc += 2;
                 call_argv = sp - call_argc;
@@ -635,7 +651,8 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 sf->cur_pc = pc;
                 if (JS_IsUndefined(new_target))
                     goto non_ctor_call;
-                super = JS_GetPrototype(ctx, func_obj);
+                JSValue func_obj_ = sf->cur_func;
+                super = JS_GetPrototype(ctx, func_obj_);
                 if (JS_IsException(super))
                     goto exception;
                 ret = JS_CallConstructor2(ctx, super, new_target, argc, (JSValueConst *)argv);
@@ -703,6 +720,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
             {
                 JSValueConst obj;
                 int scope_idx;
+                int i;
                 call_argc = get_u16(pc);
                 scope_idx = get_u16(pc + 2) + ARG_SCOPE_END;
                 pc += 4;
@@ -1161,6 +1179,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 pr = add_property(ctx, JS_VALUE_GET_OBJ(sp[-1]), atom,
                                   JS_PROP_WRITABLE | JS_PROP_VARREF);
                 if (!pr) {
+                    JSRuntime *rt = ctx->rt;
                     free_var_ref(rt, var_ref);
                     goto exception;
                 }
@@ -1387,7 +1406,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
             BREAK;
         CASE(OP_nip_catch):
             {
-                JSValue ret_val;
+                JSValue *stack_buf = sf->var_buf + b->var_count;
                 /* catch_offset ... ret_val -> ret_eval */
                 ret_val = *--sp;
                 while (sp > stack_buf &&

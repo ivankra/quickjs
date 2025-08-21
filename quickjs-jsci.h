@@ -14,16 +14,15 @@
 
 // Not needed in interpreter loop: func_obj rt p sf_s, arg_allocated_size i local_buf stack_buf pval alloca_size
 // Cold vars from: sf
+// ctx 409, sf 153, var_buf 35
 #define TAIL_DISPATCH 1
-#define TAIL_CALL_ARGS(pc) pc, sp, b, sf, ctx, var_buf, arg_buf
+#define TAIL_CALL_ARGS(pc) pc, sp, sf, ctx, var_buf
 #define TAIL_CALL_PARAMS \
     const uint8_t *pc, \
     JSValue *sp, \
-    JSFunctionBytecode *b, \
     JSStackFrame *sf, \
     JSContext *ctx, \
-    JSValue *var_buf, \
-    JSValue *arg_buf \
+    JSValue *var_buf \
 
 #if TAIL_DISPATCH
 
@@ -33,7 +32,7 @@ PRESERVE_NONE static JSValue jsci_label_done(TAIL_CALL_PARAMS);
 PRESERVE_NONE static JSValue jsci_label_done_generator(TAIL_CALL_PARAMS);
 typedef PRESERVE_NONE JSValue(* const JSHandler)(TAIL_CALL_PARAMS);
 
-// Fallthough cases
+// Fallthrough cases
 #define jsci_OP_call0 jsci_OP_call3
 #define jsci_OP_call1 jsci_OP_call3
 #define jsci_OP_call2 jsci_OP_call3
@@ -134,6 +133,8 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
             sf->argv = argv;
             p = JS_VALUE_GET_OBJ(sf->cur_func);
             b = p->u.func.function_bytecode;
+            sf->b = b;
+            sf->cpool = b->cpool;
             ctx = b->realm;
             var_refs = p->u.func.var_refs;
             sf->local_buf = arg_buf = sf->arg_buf;
@@ -209,6 +210,8 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
     rt->current_stack_frame = sf;
     ctx = b->realm; /* set the current realm */
 
+    sf->b = b;
+    sf->cpool = b->cpool;
     sf->caller_ctx = caller_ctx;
     sf->this_obj = this_obj;
     sf->new_target = new_target;
@@ -240,7 +243,7 @@ restart:
             BREAK;
         }
         CASE(OP_push_const) {
-            *sp++ = JS_DupValue(ctx, b->cpool[get_u32(pc)]);
+            *sp++ = JS_DupValue(ctx, sf->cpool[get_u32(pc)]);
             pc += 4;
             BREAK;
         }
@@ -265,11 +268,11 @@ restart:
             BREAK;
         }
         CASE(OP_push_const8) {
-            *sp++ = JS_DupValue(ctx, b->cpool[*pc++]);
+            *sp++ = JS_DupValue(ctx, sf->cpool[*pc++]);
             BREAK;
         }
         CASE(OP_fclosure8) {
-            *sp++ = js_closure(ctx, JS_DupValue(ctx, b->cpool[*pc++]), sf->var_refs, sf);
+            *sp++ = js_closure(ctx, JS_DupValue(ctx, sf->cpool[*pc++]), sf->var_refs, sf);
             if (unlikely(JS_IsException(sp[-1])))
                 GOTO_LABEL(exception);
             BREAK;
@@ -306,7 +309,7 @@ restart:
             /* OP_push_this is only called at the start of a function */
             {
                 JSValue val;
-                if (!(b->js_mode & JS_MODE_STRICT)) {
+                if (!(sf->js_mode & JS_MODE_STRICT)) {
                     uint32_t tag = JS_VALUE_GET_TAG(sf->this_obj);
                     if (likely(tag == JS_TAG_OBJECT))
                         goto normal_this;
@@ -349,7 +352,7 @@ restart:
                     break;
                 case OP_SPECIAL_OBJECT_MAPPED_ARGUMENTS:
                     *sp++ = js_build_mapped_arguments(ctx, sf->argc, (JSValueConst *)sf->argv,
-                                                      sf, min_int(sf->argc, b->arg_count));
+                                                      sf, min_int(sf->argc, sf->b->arg_count));
                     if (unlikely(JS_IsException(sp[-1])))
                         GOTO_LABEL(exception);
                     break;
@@ -540,7 +543,7 @@ restart:
 
         CASE(OP_fclosure)
             {
-                JSValue bfunc = JS_DupValue(ctx, b->cpool[get_u32(pc)]);
+                JSValue bfunc = JS_DupValue(ctx, sf->cpool[get_u32(pc)]);
                 pc += 4;
                 *sp++ = js_closure(ctx, bfunc, sf->var_refs, sf);
                 if (unlikely(JS_IsException(sp[-1])))
@@ -1052,7 +1055,7 @@ restart:
                 int idx;
                 idx = get_u16(pc);
                 pc += 2;
-                sp[0] = JS_DupValue(ctx, arg_buf[idx]);
+                sp[0] = JS_DupValue(ctx, sf->arg_buf[idx]);
                 sp++;
                 BREAK;
             }
@@ -1061,7 +1064,7 @@ restart:
                 int idx;
                 idx = get_u16(pc);
                 pc += 2;
-                set_value(ctx, &arg_buf[idx], sp[-1]);
+                set_value(ctx, &sf->arg_buf[idx], sp[-1]);
                 sp--;
                 BREAK;
             }
@@ -1070,7 +1073,7 @@ restart:
                 int idx;
                 idx = get_u16(pc);
                 pc += 2;
-                set_value(ctx, &arg_buf[idx], JS_DupValue(ctx, sp[-1]));
+                set_value(ctx, &sf->arg_buf[idx], JS_DupValue(ctx, sp[-1]));
                 BREAK;
             }
 
@@ -1090,18 +1093,18 @@ restart:
         CASE(OP_set_loc1) { set_value(ctx, &var_buf[1], JS_DupValue(ctx, sp[-1])); BREAK; }
         CASE(OP_set_loc2) { set_value(ctx, &var_buf[2], JS_DupValue(ctx, sp[-1])); BREAK; }
         CASE(OP_set_loc3) { set_value(ctx, &var_buf[3], JS_DupValue(ctx, sp[-1])); BREAK; }
-        CASE(OP_get_arg0) { *sp++ = JS_DupValue(ctx, arg_buf[0]); BREAK; }
-        CASE(OP_get_arg1) { *sp++ = JS_DupValue(ctx, arg_buf[1]); BREAK; }
-        CASE(OP_get_arg2) { *sp++ = JS_DupValue(ctx, arg_buf[2]); BREAK; }
-        CASE(OP_get_arg3) { *sp++ = JS_DupValue(ctx, arg_buf[3]); BREAK; }
-        CASE(OP_put_arg0) { set_value(ctx, &arg_buf[0], *--sp); BREAK; }
-        CASE(OP_put_arg1) { set_value(ctx, &arg_buf[1], *--sp); BREAK; }
-        CASE(OP_put_arg2) { set_value(ctx, &arg_buf[2], *--sp); BREAK; }
-        CASE(OP_put_arg3) { set_value(ctx, &arg_buf[3], *--sp); BREAK; }
-        CASE(OP_set_arg0) { set_value(ctx, &arg_buf[0], JS_DupValue(ctx, sp[-1])); BREAK; }
-        CASE(OP_set_arg1) { set_value(ctx, &arg_buf[1], JS_DupValue(ctx, sp[-1])); BREAK; }
-        CASE(OP_set_arg2) { set_value(ctx, &arg_buf[2], JS_DupValue(ctx, sp[-1])); BREAK; }
-        CASE(OP_set_arg3) { set_value(ctx, &arg_buf[3], JS_DupValue(ctx, sp[-1])); BREAK; }
+        CASE(OP_get_arg0) { *sp++ = JS_DupValue(ctx, sf->arg_buf[0]); BREAK; }
+        CASE(OP_get_arg1) { *sp++ = JS_DupValue(ctx, sf->arg_buf[1]); BREAK; }
+        CASE(OP_get_arg2) { *sp++ = JS_DupValue(ctx, sf->arg_buf[2]); BREAK; }
+        CASE(OP_get_arg3) { *sp++ = JS_DupValue(ctx, sf->arg_buf[3]); BREAK; }
+        CASE(OP_put_arg0) { set_value(ctx, &sf->arg_buf[0], *--sp); BREAK; }
+        CASE(OP_put_arg1) { set_value(ctx, &sf->arg_buf[1], *--sp); BREAK; }
+        CASE(OP_put_arg2) { set_value(ctx, &sf->arg_buf[2], *--sp); BREAK; }
+        CASE(OP_put_arg3) { set_value(ctx, &sf->arg_buf[3], *--sp); BREAK; }
+        CASE(OP_set_arg0) { set_value(ctx, &sf->arg_buf[0], JS_DupValue(ctx, sp[-1])); BREAK; }
+        CASE(OP_set_arg1) { set_value(ctx, &sf->arg_buf[1], JS_DupValue(ctx, sp[-1])); BREAK; }
+        CASE(OP_set_arg2) { set_value(ctx, &sf->arg_buf[2], JS_DupValue(ctx, sp[-1])); BREAK; }
+        CASE(OP_set_arg3) { set_value(ctx, &sf->arg_buf[3], JS_DupValue(ctx, sp[-1])); BREAK; }
         CASE(OP_get_var_ref0) { *sp++ = JS_DupValue(ctx, *sf->var_refs[0]->pvalue); BREAK; }
         CASE(OP_get_var_ref1) { *sp++ = JS_DupValue(ctx, *sf->var_refs[1]->pvalue); BREAK; }
         CASE(OP_get_var_ref2) { *sp++ = JS_DupValue(ctx, *sf->var_refs[2]->pvalue); BREAK; }
@@ -1152,7 +1155,7 @@ restart:
                 pc += 2;
                 val = *sf->var_refs[idx]->pvalue;
                 if (unlikely(JS_IsUninitialized(val))) {
-                    JS_ThrowReferenceErrorUninitialized2(ctx, b, idx, TRUE);
+                    JS_ThrowReferenceErrorUninitialized2(ctx, sf->b, idx, TRUE);
                     GOTO_LABEL(exception);
                 }
                 sp[0] = JS_DupValue(ctx, val);
@@ -1165,7 +1168,7 @@ restart:
                 idx = get_u16(pc);
                 pc += 2;
                 if (unlikely(JS_IsUninitialized(*sf->var_refs[idx]->pvalue))) {
-                    JS_ThrowReferenceErrorUninitialized2(ctx, b, idx, TRUE);
+                    JS_ThrowReferenceErrorUninitialized2(ctx, sf->b, idx, TRUE);
                     GOTO_LABEL(exception);
                 }
                 set_value(ctx, sf->var_refs[idx]->pvalue, sp[-1]);
@@ -1178,7 +1181,7 @@ restart:
                 idx = get_u16(pc);
                 pc += 2;
                 if (unlikely(!JS_IsUninitialized(*sf->var_refs[idx]->pvalue))) {
-                    JS_ThrowReferenceErrorUninitialized2(ctx, b, idx, TRUE);
+                    JS_ThrowReferenceErrorUninitialized2(ctx, sf->b, idx, TRUE);
                     GOTO_LABEL(exception);
                 }
                 set_value(ctx, sf->var_refs[idx]->pvalue, sp[-1]);
@@ -1199,7 +1202,7 @@ restart:
                 idx = get_u16(pc);
                 pc += 2;
                 if (unlikely(JS_IsUninitialized(var_buf[idx]))) {
-                    JS_ThrowReferenceErrorUninitialized2(ctx, b, idx, FALSE);
+                    JS_ThrowReferenceErrorUninitialized2(ctx, sf->b, idx, FALSE);
                     GOTO_LABEL(exception);
                 }
                 sp[0] = JS_DupValue(ctx, var_buf[idx]);
@@ -1212,7 +1215,7 @@ restart:
                 idx = get_u16(pc);
                 pc += 2;
                 if (unlikely(JS_IsUninitialized(var_buf[idx]))) {
-                    JS_ThrowReferenceErrorUninitialized2(sf->caller_ctx, b, idx, FALSE);
+                    JS_ThrowReferenceErrorUninitialized2(sf->caller_ctx, sf->b, idx, FALSE);
                     GOTO_LABEL(exception);
                 }
                 sp[0] = JS_DupValue(ctx, var_buf[idx]);
@@ -1225,7 +1228,7 @@ restart:
                 idx = get_u16(pc);
                 pc += 2;
                 if (unlikely(JS_IsUninitialized(var_buf[idx]))) {
-                    JS_ThrowReferenceErrorUninitialized2(ctx, b, idx, FALSE);
+                    JS_ThrowReferenceErrorUninitialized2(ctx, sf->b, idx, FALSE);
                     GOTO_LABEL(exception);
                 }
                 set_value(ctx, &var_buf[idx], sp[-1]);
@@ -1408,7 +1411,7 @@ restart:
             {
                 int32_t diff;
                 diff = get_u32(pc);
-                sp[0] = JS_NewCatchOffset(ctx, pc + diff - b->byte_code_buf);
+                sp[0] = JS_NewCatchOffset(ctx, pc + diff - sf->b->byte_code_buf);
                 sp++;
                 pc += 4;
                 BREAK;
@@ -1418,7 +1421,7 @@ restart:
                 int32_t diff;
                 diff = get_u32(pc);
                 /* XXX: should have a different tag to avoid security flaw */
-                sp[0] = JS_NewInt32(ctx, pc + 4 - b->byte_code_buf);
+                sp[0] = JS_NewInt32(ctx, pc + 4 - sf->b->byte_code_buf);
                 sp++;
                 pc += diff;
                 BREAK;
@@ -1431,13 +1434,13 @@ restart:
                 if (unlikely(JS_VALUE_GET_TAG(op1) != JS_TAG_INT))
                     goto ret_fail;
                 pos = JS_VALUE_GET_INT(op1);
-                if (unlikely(pos >= b->byte_code_len)) {
+                if (unlikely(pos >= sf->b->byte_code_len)) {
                 ret_fail:
                     JS_ThrowInternalError(ctx, "invalid ret value");
                     GOTO_LABEL(exception);
                 }
                 sp--;
-                pc = b->byte_code_buf + pos;
+                pc = sf->b->byte_code_buf + pos;
                 BREAK;
             }
 
@@ -1518,7 +1521,7 @@ restart:
         }
         CASE(OP_nip_catch)
             {
-                JSValue *stack_buf = sf->var_buf + b->var_count;
+                JSValue *stack_buf = sf->var_buf + sf->b->var_count;
                 /* catch_offset ... ret_val -> ret_eval */
                 sf->ret_val = *--sp;
                 while (sp > stack_buf &&
@@ -2832,7 +2835,7 @@ restart:
         DEFAULT {
             int opcode = pc[-1];
             JS_ThrowInternalError(ctx, "invalid opcode: pc=%u opcode=0x%02x",
-                                  (int)(pc - b->byte_code_buf - 1), opcode);
+                                  (int)(pc - sf->b->byte_code_buf - 1), opcode);
             GOTO_LABEL(exception);
         }
 
@@ -2848,7 +2851,7 @@ restart:
 #if TAIL_DISPATCH
 LABEL_FUNC(exception) {
     JSRuntime *rt = sf->caller_ctx->rt;
-    JSValue *stack_buf = sf->var_buf + b->var_count;
+    JSValue *stack_buf = sf->var_buf + sf->b->var_count;
 #else
 exception:
 #endif
@@ -2873,7 +2876,7 @@ exception:
                 } else {
                     *sp++ = rt->current_exception;
                     rt->current_exception = JS_UNINITIALIZED;
-                    pc = b->byte_code_buf + pos;
+                    pc = sf->b->byte_code_buf + pos;
                     goto restart;
                 }
             }
@@ -2883,7 +2886,7 @@ exception:
     /* the local variables are freed by the caller in the generator
        case. Hence the label 'done' should never be reached in a
        generator function. */
-    if (b->func_kind != JS_FUNC_NORMAL)
+    if (sf->b->func_kind != JS_FUNC_NORMAL)
         GOTO_LABEL(done_generator);
     GOTO_LABEL(done);
 #if TAIL_DISPATCH

@@ -324,6 +324,7 @@ typedef struct JSStackFrame {
     JSValue cur_func; /* current function, JS_UNDEFINED if the frame is detached */
     JSValue *arg_buf; /* arguments */
     JSValue *var_buf; /* variables */
+    JSValue *cpool; /* constant pool (self pointer) */
     struct list_head var_ref_list; /* list of JSVarRef.var_ref_link */
     const uint8_t *cur_pc; /* only used in bytecode functions : PC of the
                         instruction after the call */
@@ -333,8 +334,9 @@ typedef struct JSStackFrame {
        the function is running. */
     JSValue *cur_sp;
 
-    // Temps used only during interpreter loop
     struct JSVarRef **var_refs;
+    // Temps used only during interpreter loop
+    struct JSFunctionBytecode *b;
     JSContext *caller_ctx;
     int argc;  // merge with arg_count?
     JSValue *argv;  // merge with arg_buf?

@@ -43,6 +43,9 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
 #define CASE(op)        case op
 #define DEFAULT         default
 #define BREAK           break
+#define GOTO_EXCEPTION  goto exception
+#define GOTO_DONE       goto done
+#define GOTO_DONE_GENERATOR goto done_generator
 #else
     static const void * const dispatch_table[256] = {
 #define DEF(id, size, n_pop, n_push, f) && case_OP_ ## id,
@@ -58,6 +61,9 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
 #define CASE(op)        case_ ## op
 #define DEFAULT         case_default
 #define BREAK           SWITCH(pc)
+#define GOTO_EXCEPTION  goto exception
+#define GOTO_DONE       goto done
+#define GOTO_DONE_GENERATOR goto done_generator
 #endif
 
     if (js_poll_interrupts(caller_ctx))
@@ -176,27 +182,30 @@ exception:
     /* the local variables are freed by the caller in the generator
        case. Hence the label 'done' should never be reached in a
        generator function. */
-    if (b->func_kind != JS_FUNC_NORMAL) {
-done_generator:
-        sf->cur_pc = pc;
-        sf->cur_sp = sp;
-    } else {
+    if (b->func_kind != JS_FUNC_NORMAL)
+        GOTO_DONE_GENERATOR;
+
 done:
-        if (unlikely(!list_empty(&sf->var_ref_list))) {
-            /* variable references reference the stack: must close them */
-            close_var_refs(rt, sf);
-        }
-        /* free the local variables and stack */
-        for(pval = local_buf; pval < sp; pval++) {
-            JS_FreeValue(ctx, *pval);
-        }
+    if (unlikely(!list_empty(&sf->var_ref_list))) {
+        /* variable references reference the stack: must close them */
+        close_var_refs(rt, sf);
     }
+    /* free the local variables and stack */
+    for(pval = local_buf; pval < sp; pval++) {
+        JS_FreeValue(ctx, *pval);
+    }
+    rt->current_stack_frame = sf->prev_frame;
+    return ret_val;
+
+done_generator:
+    sf->cur_pc = pc;
+    sf->cur_sp = sp;
     rt->current_stack_frame = sf->prev_frame;
     return ret_val;
 
 /*****************************************************************************/
 
- restart:
+restart:
     for(;;) {
         int call_argc;
         JSValue *call_argv;
@@ -243,7 +252,7 @@ done:
         CASE(OP_fclosure8):
             *sp++ = js_closure(ctx, JS_DupValue(ctx, b->cpool[*pc++]), var_refs, sf);
             if (unlikely(JS_IsException(sp[-1])))
-                goto exception;
+                GOTO_EXCEPTION;
             BREAK;
         CASE(OP_push_empty_string):
             *sp++ = JS_AtomToString(ctx, JS_ATOM_empty_string);
@@ -255,7 +264,7 @@ done:
                 sf->cur_pc = pc;
                 val = JS_GetProperty(ctx, sp[-1], JS_ATOM_length);
                 if (unlikely(JS_IsException(val)))
-                    goto exception;
+                    GOTO_EXCEPTION;
                 JS_FreeValue(ctx, sp[-1]);
                 sp[-1] = val;
             }
@@ -284,7 +293,7 @@ done:
                     } else {
                         val = JS_ToObject(ctx, this_obj);
                         if (JS_IsException(val))
-                            goto exception;
+                            GOTO_EXCEPTION;
                     }
                 } else {
                 normal_this:
@@ -302,7 +311,7 @@ done:
         CASE(OP_object):
             *sp++ = JS_NewObject(ctx);
             if (unlikely(JS_IsException(sp[-1])))
-                goto exception;
+                GOTO_EXCEPTION;
             BREAK;
         CASE(OP_special_object):
             {
@@ -311,13 +320,13 @@ done:
                 case OP_SPECIAL_OBJECT_ARGUMENTS:
                     *sp++ = js_build_arguments(ctx, argc, (JSValueConst *)argv);
                     if (unlikely(JS_IsException(sp[-1])))
-                        goto exception;
+                        GOTO_EXCEPTION;
                     break;
                 case OP_SPECIAL_OBJECT_MAPPED_ARGUMENTS:
                     *sp++ = js_build_mapped_arguments(ctx, argc, (JSValueConst *)argv,
                                                       sf, min_int(argc, b->arg_count));
                     if (unlikely(JS_IsException(sp[-1])))
-                        goto exception;
+                        GOTO_EXCEPTION;
                     break;
                 case OP_SPECIAL_OBJECT_THIS_FUNC:
                     *sp++ = JS_DupValue(ctx, sf->cur_func);
@@ -339,12 +348,12 @@ done:
                 case OP_SPECIAL_OBJECT_VAR_OBJECT:
                     *sp++ = JS_NewObjectProto(ctx, JS_NULL);
                     if (unlikely(JS_IsException(sp[-1])))
-                        goto exception;
+                        GOTO_EXCEPTION;
                     break;
                 case OP_SPECIAL_OBJECT_IMPORT_META:
                     *sp++ = js_import_meta(ctx);
                     if (unlikely(JS_IsException(sp[-1])))
-                        goto exception;
+                        GOTO_EXCEPTION;
                     break;
                 default:
                     abort();
@@ -357,7 +366,7 @@ done:
                 pc += 2;
                 *sp++ = js_build_rest(ctx, first, argc, (JSValueConst *)argv);
                 if (unlikely(JS_IsException(sp[-1])))
-                    goto exception;
+                    GOTO_EXCEPTION;
             }
             BREAK;
 
@@ -509,7 +518,7 @@ done:
                 pc += 4;
                 *sp++ = js_closure(ctx, bfunc, var_refs, sf);
                 if (unlikely(JS_IsException(sp[-1])))
-                    goto exception;
+                    GOTO_EXCEPTION;
             }
             BREAK;
 #if SHORT_OPCODES
@@ -525,7 +534,7 @@ done:
             ret_val = JS_CallInternal(ctx, call_argv[-1], JS_UNDEFINED,
                                       JS_UNDEFINED, call_argc, call_argv, 0);
             if (unlikely(JS_IsException(ret_val)))
-                goto exception;
+                GOTO_EXCEPTION;
             for(i = -1; i < call_argc; i++)
                 JS_FreeValue(ctx, call_argv[i]);
             sp -= call_argc + 1;
@@ -539,16 +548,14 @@ done:
                 int opcode_ = pc[-1], i;
                 call_argc = get_u16(pc);
                 pc += 2;
-                goto has_call_argc;
-            has_call_argc:
                 call_argv = sp - call_argc;
                 sf->cur_pc = pc;
                 ret_val = JS_CallInternal(ctx, call_argv[-1], JS_UNDEFINED,
                                           JS_UNDEFINED, call_argc, call_argv, 0);
                 if (unlikely(JS_IsException(ret_val)))
-                    goto exception;
+                    GOTO_EXCEPTION;
                 if (opcode_ == OP_tail_call)
-                    goto done;
+                    GOTO_DONE;
                 for(i = -1; i < call_argc; i++)
                     JS_FreeValue(ctx, call_argv[i]);
                 sp -= call_argc + 1;
@@ -566,7 +573,7 @@ done:
                                                      call_argv[-1],
                                                      call_argc, call_argv, 0);
                 if (unlikely(JS_IsException(ret_val)))
-                    goto exception;
+                    GOTO_EXCEPTION;
                 for(i = -2; i < call_argc; i++)
                     JS_FreeValue(ctx, call_argv[i]);
                 sp -= call_argc + 2;
@@ -584,9 +591,9 @@ done:
                 ret_val = JS_CallInternal(ctx, call_argv[-1], call_argv[-2],
                                           JS_UNDEFINED, call_argc, call_argv, 0);
                 if (unlikely(JS_IsException(ret_val)))
-                    goto exception;
+                    GOTO_EXCEPTION;
                 if (opcode_ == OP_tail_call_method)
-                    goto done;
+                    GOTO_DONE;
                 for(i = -2; i < call_argc; i++)
                     JS_FreeValue(ctx, call_argv[i]);
                 sp -= call_argc + 2;
@@ -601,7 +608,7 @@ done:
                 pc += 2;
                 ret_val = JS_NewArray(ctx);
                 if (unlikely(JS_IsException(ret_val)))
-                    goto exception;
+                    GOTO_EXCEPTION;
                 call_argv = sp - call_argc;
                 for(i = 0; i < call_argc; i++) {
                     ret = JS_DefinePropertyValue(ctx, ret_val, __JS_AtomFromUInt32(i), call_argv[i],
@@ -609,7 +616,7 @@ done:
                     call_argv[i] = JS_UNDEFINED;
                     if (ret < 0) {
                         JS_FreeValue(ctx, ret_val);
-                        goto exception;
+                        GOTO_EXCEPTION;
                     }
                 }
                 sp -= call_argc;
@@ -626,7 +633,7 @@ done:
 
                 ret_val = js_function_apply(ctx, sp[-3], 2, (JSValueConst *)&sp[-2], magic);
                 if (unlikely(JS_IsException(ret_val)))
-                    goto exception;
+                    GOTO_EXCEPTION;
                 JS_FreeValue(ctx, sp[-3]);
                 JS_FreeValue(ctx, sp[-2]);
                 JS_FreeValue(ctx, sp[-1]);
@@ -636,17 +643,17 @@ done:
             BREAK;
         CASE(OP_return):
             ret_val = *--sp;
-            goto done;
+            GOTO_DONE;
         CASE(OP_return_undef):
             ret_val = JS_UNDEFINED;
-            goto done;
+            GOTO_DONE;
 
         CASE(OP_check_ctor_return):
             /* return TRUE if 'this' should be returned */
             if (!JS_IsObject(sp[-1])) {
                 if (!JS_IsUndefined(sp[-1])) {
                     JS_ThrowTypeError(caller_ctx, "derived class constructor must return an object or undefined");
-                    goto exception;
+                    GOTO_EXCEPTION;
                 }
                 sp[0] = JS_TRUE;
             } else {
@@ -658,7 +665,7 @@ done:
             if (JS_IsUndefined(new_target)) {
             non_ctor_call:
                 JS_ThrowTypeError(ctx, "class constructors must be invoked with 'new'");
-                goto exception;
+                GOTO_EXCEPTION;
             }
             BREAK;
         CASE(OP_init_ctor):
@@ -670,11 +677,11 @@ done:
                 JSValue func_obj_ = sf->cur_func;
                 super = JS_GetPrototype(ctx, func_obj_);
                 if (JS_IsException(super))
-                    goto exception;
+                    GOTO_EXCEPTION;
                 ret = JS_CallConstructor2(ctx, super, new_target, argc, (JSValueConst *)argv);
                 JS_FreeValue(ctx, super);
                 if (JS_IsException(ret))
-                    goto exception;
+                    GOTO_EXCEPTION;
                 *sp++ = ret;
             }
             BREAK;
@@ -682,16 +689,16 @@ done:
             {
                 int ret = JS_CheckBrand(ctx, sp[-2], sp[-1]);
                 if (ret < 0)
-                    goto exception;
+                    GOTO_EXCEPTION;
                 if (!ret) {
                     JS_ThrowTypeError(ctx, "invalid brand on object");
-                    goto exception;
+                    GOTO_EXCEPTION;
                 }
             }
             BREAK;
         CASE(OP_add_brand):
             if (JS_AddBrand(ctx, sp[-2], sp[-1]) < 0)
-                goto exception;
+                GOTO_EXCEPTION;
             JS_FreeValue(ctx, sp[-2]);
             JS_FreeValue(ctx, sp[-1]);
             sp -= 2;
@@ -699,7 +706,7 @@ done:
 
         CASE(OP_throw):
             JS_Throw(ctx, *--sp);
-            goto exception;
+            GOTO_EXCEPTION;
 
         CASE(OP_throw_error):
 #define JS_THROW_VAR_RO             0
@@ -730,7 +737,7 @@ done:
                 else
                     JS_ThrowInternalError(ctx, "invalid throw var type %d", type);
             }
-            goto exception;
+            GOTO_EXCEPTION;
 
         CASE(OP_eval):
             {
@@ -754,7 +761,7 @@ done:
                                               JS_UNDEFINED, call_argc, call_argv, 0);
                 }
                 if (unlikely(JS_IsException(ret_val)))
-                    goto exception;
+                    GOTO_EXCEPTION;
                 for(i = -1; i < call_argc; i++)
                     JS_FreeValue(ctx, call_argv[i]);
                 sp -= call_argc + 1;
@@ -774,7 +781,7 @@ done:
                 sf->cur_pc = pc;
                 tab = build_arg_list(ctx, &len, sp[-1]);
                 if (!tab)
-                    goto exception;
+                    GOTO_EXCEPTION;
                 if (js_same_value(ctx, sp[-2], ctx->eval_obj)) {
                     if (len >= 1)
                         obj = tab[0];
@@ -788,7 +795,7 @@ done:
                 }
                 free_arg_list(ctx, tab, len);
                 if (unlikely(JS_IsException(ret_val)))
-                    goto exception;
+                    GOTO_EXCEPTION;
                 JS_FreeValue(ctx, sp[-2]);
                 JS_FreeValue(ctx, sp[-1]);
                 sp -= 2;
@@ -810,7 +817,7 @@ done:
                 sf->cur_pc = pc;
                 proto = JS_GetPrototype(ctx, sp[-1]);
                 if (JS_IsException(proto))
-                    goto exception;
+                    GOTO_EXCEPTION;
                 JS_FreeValue(ctx, sp[-1]);
                 sp[-1] = proto;
             }
@@ -822,7 +829,7 @@ done:
                 sf->cur_pc = pc;
                 val = js_dynamic_import(ctx, sp[-2], sp[-1]);
                 if (JS_IsException(val))
-                    goto exception;
+                    GOTO_EXCEPTION;
                 JS_FreeValue(ctx, sp[-2]);
                 JS_FreeValue(ctx, sp[-1]);
                 sp--;
@@ -840,7 +847,7 @@ done:
 
                 ret = JS_CheckGlobalVar(ctx, atom);
                 if (ret < 0)
-                    goto exception;
+                    GOTO_EXCEPTION;
                 *sp++ = JS_NewBool(ctx, ret);
             }
             BREAK;
@@ -857,7 +864,7 @@ done:
 
                 val = JS_GetGlobalVar(ctx, atom, opcode_ - OP_get_var_undef);
                 if (unlikely(JS_IsException(val)))
-                    goto exception;
+                    GOTO_EXCEPTION;
                 *sp++ = val;
             }
             BREAK;
@@ -875,7 +882,7 @@ done:
                 ret = JS_SetGlobalVar(ctx, atom, sp[-1], opcode_ - OP_put_var);
                 sp--;
                 if (unlikely(ret < 0))
-                    goto exception;
+                    GOTO_EXCEPTION;
             }
             BREAK;
 
@@ -890,12 +897,12 @@ done:
                 /* sp[-2] is JS_TRUE or JS_FALSE */
                 if (unlikely(!JS_VALUE_GET_INT(sp[-2]))) {
                     JS_ThrowReferenceErrorNotDefined(ctx, atom);
-                    goto exception;
+                    GOTO_EXCEPTION;
                 }
                 ret = JS_SetGlobalVar(ctx, atom, sp[-1], 2);
                 sp -= 2;
                 if (unlikely(ret < 0))
-                    goto exception;
+                    GOTO_EXCEPTION;
             }
             BREAK;
 
@@ -908,7 +915,7 @@ done:
                 pc += 5;
                 sf->cur_pc = pc;
                 if (JS_CheckDefineGlobalVar(ctx, atom, flags))
-                    goto exception;
+                    GOTO_EXCEPTION;
             }
             BREAK;
         CASE(OP_define_var):
@@ -920,7 +927,7 @@ done:
                 pc += 5;
                 sf->cur_pc = pc;
                 if (JS_DefineGlobalVar(ctx, atom, flags))
-                    goto exception;
+                    GOTO_EXCEPTION;
             }
             BREAK;
         CASE(OP_define_func):
@@ -932,7 +939,7 @@ done:
                 pc += 5;
                 sf->cur_pc = pc;
                 if (JS_DefineGlobalFunction(ctx, atom, sp[-1], flags))
-                    goto exception;
+                    GOTO_EXCEPTION;
                 JS_FreeValue(ctx, sp[-1]);
                 sp--;
             }
@@ -1071,7 +1078,7 @@ done:
                 val = *var_refs[idx]->pvalue;
                 if (unlikely(JS_IsUninitialized(val))) {
                     JS_ThrowReferenceErrorUninitialized2(ctx, b, idx, TRUE);
-                    goto exception;
+                    GOTO_EXCEPTION;
                 }
                 sp[0] = JS_DupValue(ctx, val);
                 sp++;
@@ -1084,7 +1091,7 @@ done:
                 pc += 2;
                 if (unlikely(JS_IsUninitialized(*var_refs[idx]->pvalue))) {
                     JS_ThrowReferenceErrorUninitialized2(ctx, b, idx, TRUE);
-                    goto exception;
+                    GOTO_EXCEPTION;
                 }
                 set_value(ctx, var_refs[idx]->pvalue, sp[-1]);
                 sp--;
@@ -1097,7 +1104,7 @@ done:
                 pc += 2;
                 if (unlikely(!JS_IsUninitialized(*var_refs[idx]->pvalue))) {
                     JS_ThrowReferenceErrorUninitialized2(ctx, b, idx, TRUE);
-                    goto exception;
+                    GOTO_EXCEPTION;
                 }
                 set_value(ctx, var_refs[idx]->pvalue, sp[-1]);
                 sp--;
@@ -1118,7 +1125,7 @@ done:
                 pc += 2;
                 if (unlikely(JS_IsUninitialized(var_buf[idx]))) {
                     JS_ThrowReferenceErrorUninitialized2(ctx, b, idx, FALSE);
-                    goto exception;
+                    GOTO_EXCEPTION;
                 }
                 sp[0] = JS_DupValue(ctx, var_buf[idx]);
                 sp++;
@@ -1131,7 +1138,7 @@ done:
                 pc += 2;
                 if (unlikely(JS_IsUninitialized(var_buf[idx]))) {
                     JS_ThrowReferenceErrorUninitialized2(caller_ctx, b, idx, FALSE);
-                    goto exception;
+                    GOTO_EXCEPTION;
                 }
                 sp[0] = JS_DupValue(ctx, var_buf[idx]);
                 sp++;
@@ -1144,7 +1151,7 @@ done:
                 pc += 2;
                 if (unlikely(JS_IsUninitialized(var_buf[idx]))) {
                     JS_ThrowReferenceErrorUninitialized2(ctx, b, idx, FALSE);
-                    goto exception;
+                    GOTO_EXCEPTION;
                 }
                 set_value(ctx, &var_buf[idx], sp[-1]);
                 sp--;
@@ -1157,7 +1164,7 @@ done:
                 pc += 2;
                 if (unlikely(!JS_IsUninitialized(var_buf[idx]))) {
                     JS_ThrowReferenceError(ctx, "'this' can be initialized only once");
-                    goto exception;
+                    GOTO_EXCEPTION;
                 }
                 set_value(ctx, &var_buf[idx], sp[-1]);
                 sp--;
@@ -1186,21 +1193,21 @@ done:
                 pc += 6;
                 *sp++ = JS_NewObjectProto(ctx, JS_NULL);
                 if (unlikely(JS_IsException(sp[-1])))
-                    goto exception;
+                    GOTO_EXCEPTION;
                 if (opcode_ == OP_make_var_ref_ref) {
                     var_ref = var_refs[idx];
                     var_ref->header.ref_count++;
                 } else {
                     var_ref = get_var_ref(ctx, sf, idx, opcode_ == OP_make_arg_ref);
                     if (!var_ref)
-                        goto exception;
+                        GOTO_EXCEPTION;
                 }
                 pr = add_property(ctx, JS_VALUE_GET_OBJ(sp[-1]), atom,
                                   JS_PROP_WRITABLE | JS_PROP_VARREF);
                 if (!pr) {
                     JSRuntime *rt = ctx->rt;
                     free_var_ref(rt, var_ref);
-                    goto exception;
+                    GOTO_EXCEPTION;
                 }
                 pr->u.var_ref = var_ref;
                 *sp++ = JS_AtomToValue(ctx, atom);
@@ -1214,7 +1221,7 @@ done:
                 sf->cur_pc = pc;
 
                 if (JS_GetGlobalVarRef(ctx, atom, sp))
-                    goto exception;
+                    GOTO_EXCEPTION;
                 sp += 2;
             }
             BREAK;
@@ -1222,18 +1229,18 @@ done:
         CASE(OP_goto):
             pc += (int32_t)get_u32(pc);
             if (unlikely(js_poll_interrupts(ctx)))
-                goto exception;
+                GOTO_EXCEPTION;
             BREAK;
 #if SHORT_OPCODES
         CASE(OP_goto16):
             pc += (int16_t)get_u16(pc);
             if (unlikely(js_poll_interrupts(ctx)))
-                goto exception;
+                GOTO_EXCEPTION;
             BREAK;
         CASE(OP_goto8):
             pc += (int8_t)pc[0];
             if (unlikely(js_poll_interrupts(ctx)))
-                goto exception;
+                GOTO_EXCEPTION;
             BREAK;
 #endif
         CASE(OP_if_true):
@@ -1253,7 +1260,7 @@ done:
                     pc += (int32_t)get_u32(pc - 4) - 4;
                 }
                 if (unlikely(js_poll_interrupts(ctx)))
-                    goto exception;
+                    GOTO_EXCEPTION;
             }
             BREAK;
         CASE(OP_if_false):
@@ -1274,7 +1281,7 @@ done:
                     pc += (int32_t)get_u32(pc - 4) - 4;
                 }
                 if (unlikely(js_poll_interrupts(ctx)))
-                    goto exception;
+                    GOTO_EXCEPTION;
             }
             BREAK;
 #if SHORT_OPCODES
@@ -1295,7 +1302,7 @@ done:
                     pc += (int8_t)pc[-1] - 1;
                 }
                 if (unlikely(js_poll_interrupts(ctx)))
-                    goto exception;
+                    GOTO_EXCEPTION;
             }
             BREAK;
         CASE(OP_if_false8):
@@ -1315,7 +1322,7 @@ done:
                     pc += (int8_t)pc[-1] - 1;
                 }
                 if (unlikely(js_poll_interrupts(ctx)))
-                    goto exception;
+                    GOTO_EXCEPTION;
             }
             BREAK;
 #endif
@@ -1349,7 +1356,7 @@ done:
                 if (unlikely(pos >= b->byte_code_len)) {
                 ret_fail:
                     JS_ThrowInternalError(ctx, "invalid ret value");
-                    goto exception;
+                    GOTO_EXCEPTION;
                 }
                 sp--;
                 pc = b->byte_code_buf + pos;
@@ -1359,18 +1366,18 @@ done:
         CASE(OP_for_in_start):
             sf->cur_pc = pc;
             if (js_for_in_start(ctx, sp))
-                goto exception;
+                GOTO_EXCEPTION;
             BREAK;
         CASE(OP_for_in_next):
             sf->cur_pc = pc;
             if (js_for_in_next(ctx, sp))
-                goto exception;
+                GOTO_EXCEPTION;
             sp += 2;
             BREAK;
         CASE(OP_for_of_start):
             sf->cur_pc = pc;
             if (js_for_of_start(ctx, sp, FALSE))
-                goto exception;
+                GOTO_EXCEPTION;
             sp += 1;
             *sp++ = JS_NewCatchOffset(ctx, 0);
             BREAK;
@@ -1380,33 +1387,33 @@ done:
                 pc += 1;
                 sf->cur_pc = pc;
                 if (js_for_of_next(ctx, sp, offset))
-                    goto exception;
+                    GOTO_EXCEPTION;
                 sp += 2;
             }
             BREAK;
         CASE(OP_for_await_of_next):
             sf->cur_pc = pc;
             if (js_for_await_of_next(ctx, sp))
-                goto exception;
+                GOTO_EXCEPTION;
             sp++;
             BREAK;
         CASE(OP_for_await_of_start):
             sf->cur_pc = pc;
             if (js_for_of_start(ctx, sp, TRUE))
-                goto exception;
+                GOTO_EXCEPTION;
             sp += 1;
             *sp++ = JS_NewCatchOffset(ctx, 0);
             BREAK;
         CASE(OP_iterator_get_value_done):
             sf->cur_pc = pc;
             if (js_iterator_get_value_done(ctx, sp))
-                goto exception;
+                GOTO_EXCEPTION;
             sp += 1;
             BREAK;
         CASE(OP_iterator_check_object):
             if (unlikely(!JS_IsObject(sp[-1]))) {
                 JS_ThrowTypeError(ctx, "iterator must return an object");
-                goto exception;
+                GOTO_EXCEPTION;
             }
             BREAK;
 
@@ -1418,7 +1425,7 @@ done:
             if (!JS_IsUndefined(sp[-1])) {
                 sf->cur_pc = pc;
                 if (JS_IteratorClose(ctx, sp[-1], FALSE))
-                    goto exception;
+                    GOTO_EXCEPTION;
                 JS_FreeValue(ctx, sp[-1]);
             }
             sp--;
@@ -1435,7 +1442,7 @@ done:
                 if (unlikely(sp == stack_buf)) {
                     JS_ThrowInternalError(ctx, "nip_catch");
                     JS_FreeValue(ctx, ret_val);
-                    goto exception;
+                    GOTO_EXCEPTION;
                 }
                 sp[-1] = ret_val;
             }
@@ -1449,7 +1456,7 @@ done:
                 ret = JS_Call(ctx, sp[-3], sp[-4],
                               1, (JSValueConst *)(sp - 1));
                 if (JS_IsException(ret))
-                    goto exception;
+                    GOTO_EXCEPTION;
                 JS_FreeValue(ctx, sp[-1]);
                 sp[-1] = ret;
             }
@@ -1466,7 +1473,7 @@ done:
                 method = JS_GetProperty(ctx, sp[-4], (flags & 1) ?
                                         JS_ATOM_throw : JS_ATOM_return);
                 if (JS_IsException(method))
-                    goto exception;
+                    GOTO_EXCEPTION;
                 if (JS_IsUndefined(method) || JS_IsNull(method)) {
                     ret_flag = TRUE;
                 } else {
@@ -1479,7 +1486,7 @@ done:
                                           1, (JSValueConst *)(sp - 1));
                     }
                     if (JS_IsException(ret))
-                        goto exception;
+                        GOTO_EXCEPTION;
                     JS_FreeValue(ctx, sp[-1]);
                     sp[-1] = ret;
                     ret_flag = FALSE;
@@ -1514,7 +1521,7 @@ done:
                 sf->cur_pc = pc;
                 val = JS_GetProperty(ctx, sp[-1], atom);
                 if (unlikely(JS_IsException(val)))
-                    goto exception;
+                    GOTO_EXCEPTION;
                 JS_FreeValue(ctx, sp[-1]);
                 sp[-1] = val;
             }
@@ -1530,7 +1537,7 @@ done:
                 sf->cur_pc = pc;
                 val = JS_GetProperty(ctx, sp[-1], atom);
                 if (unlikely(JS_IsException(val)))
-                    goto exception;
+                    GOTO_EXCEPTION;
                 *sp++ = val;
             }
             BREAK;
@@ -1548,7 +1555,7 @@ done:
                 JS_FreeValue(ctx, sp[-2]);
                 sp -= 2;
                 if (unlikely(ret < 0))
-                    goto exception;
+                    GOTO_EXCEPTION;
             }
             BREAK;
 
@@ -1561,7 +1568,7 @@ done:
                 pc += 4;
                 val = JS_NewSymbolFromAtom(ctx, atom, JS_ATOM_TYPE_PRIVATE);
                 if (JS_IsException(val))
-                    goto exception;
+                    GOTO_EXCEPTION;
                 *sp++ = val;
             }
             BREAK;
@@ -1576,7 +1583,7 @@ done:
                 sp[-2] = val;
                 sp--;
                 if (unlikely(JS_IsException(val)))
-                    goto exception;
+                    GOTO_EXCEPTION;
             }
             BREAK;
 
@@ -1588,7 +1595,7 @@ done:
                 JS_FreeValue(ctx, sp[-1]);
                 sp -= 3;
                 if (unlikely(ret < 0))
-                    goto exception;
+                    GOTO_EXCEPTION;
             }
             BREAK;
 
@@ -1599,7 +1606,7 @@ done:
                 JS_FreeValue(ctx, sp[-2]);
                 sp -= 2;
                 if (unlikely(ret < 0))
-                    goto exception;
+                    GOTO_EXCEPTION;
             }
             BREAK;
 
@@ -1614,7 +1621,7 @@ done:
                                              JS_PROP_C_W_E | JS_PROP_THROW);
                 sp--;
                 if (unlikely(ret < 0))
-                    goto exception;
+                    GOTO_EXCEPTION;
             }
             BREAK;
 
@@ -1627,7 +1634,7 @@ done:
 
                 ret = JS_DefineObjectName(ctx, sp[-1], atom, JS_PROP_CONFIGURABLE);
                 if (unlikely(ret < 0))
-                    goto exception;
+                    GOTO_EXCEPTION;
             }
             BREAK;
         CASE(OP_set_name_computed):
@@ -1635,7 +1642,7 @@ done:
                 int ret;
                 ret = JS_DefineObjectNameComputed(ctx, sp[-1], sp[-2], JS_PROP_CONFIGURABLE);
                 if (unlikely(ret < 0))
-                    goto exception;
+                    GOTO_EXCEPTION;
             }
             BREAK;
         CASE(OP_set_proto):
@@ -1645,7 +1652,7 @@ done:
                 proto = sp[-1];
                 if (JS_IsObject(proto) || JS_IsNull(proto)) {
                     if (JS_SetPrototypeInternal(ctx, sp[-2], proto, TRUE) < 0)
-                        goto exception;
+                        GOTO_EXCEPTION;
                 }
                 JS_FreeValue(ctx, proto);
                 sp--;
@@ -1672,7 +1679,7 @@ done:
                 if (is_computed) {
                     atom = JS_ValueToAtom(ctx, sp[-2]);
                     if (unlikely(atom == JS_ATOM_NULL))
-                        goto exception;
+                        GOTO_EXCEPTION;
                     opcode_ += OP_define_method - OP_define_method_computed;
                 } else {
                     atom = get_u32(pc);
@@ -1711,7 +1718,7 @@ done:
                 }
                 sp -= 1 + is_computed;
                 if (unlikely(ret < 0))
-                    goto exception;
+                    GOTO_EXCEPTION;
             }
             BREAK;
 
@@ -1728,7 +1735,7 @@ done:
                 if (js_op_define_class(ctx, sp, atom, class_flags,
                                        var_refs, sf,
                                        (opcode_ == OP_define_class_computed)) < 0)
-                    goto exception;
+                    GOTO_EXCEPTION;
             }
             BREAK;
 
@@ -1742,7 +1749,7 @@ done:
                 sp[-2] = val;
                 sp--;
                 if (unlikely(JS_IsException(val)))
-                    goto exception;
+                    GOTO_EXCEPTION;
             }
             BREAK;
 
@@ -1754,7 +1761,7 @@ done:
                 val = JS_GetPropertyValue(ctx, sp[-2], sp[-1]);
                 sp[-1] = val;
                 if (unlikely(JS_IsException(val)))
-                    goto exception;
+                    GOTO_EXCEPTION;
             }
             BREAK;
 
@@ -1772,12 +1779,12 @@ done:
                     /* must be tested nefore JS_ToPropertyKey */
                     if (unlikely(JS_IsUndefined(sp[-2]) || JS_IsNull(sp[-2]))) {
                         JS_ThrowTypeError(ctx, "value has no property");
-                        goto exception;
+                        GOTO_EXCEPTION;
                     }
                     sf->cur_pc = pc;
                     ret_val = JS_ToPropertyKey(ctx, sp[-1]);
                     if (JS_IsException(ret_val))
-                        goto exception;
+                        GOTO_EXCEPTION;
                     JS_FreeValue(ctx, sp[-1]);
                     sp[-1] = ret_val;
                     break;
@@ -1786,7 +1793,7 @@ done:
                 val = JS_GetPropertyValue(ctx, sp[-2], JS_DupValue(ctx, sp[-1]));
                 *sp++ = val;
                 if (unlikely(JS_IsException(val)))
-                    goto exception;
+                    GOTO_EXCEPTION;
             }
             BREAK;
             
@@ -1799,22 +1806,22 @@ done:
                 sf->cur_pc = pc;
                 atom = JS_ValueToAtom(ctx, sp[-1]);
                 if (atom == JS_ATOM_NULL)
-                    goto exception;
+                    GOTO_EXCEPTION;
                 if (unlikely(JS_IsUndefined(sp[-2]))) {
                     JS_ThrowReferenceErrorNotDefined(ctx, atom);
                     JS_FreeAtom(ctx, atom);
-                    goto exception;
+                    GOTO_EXCEPTION;
                 }
                 ret = JS_HasProperty(ctx, sp[-2], atom);
                 if (unlikely(ret <= 0)) {
                     if (ret < 0) {
                         JS_FreeAtom(ctx, atom);
-                        goto exception;
+                        GOTO_EXCEPTION;
                     }
                     if (is_strict_mode(ctx)) {
                         JS_ThrowReferenceErrorNotDefined(ctx, atom);
                         JS_FreeAtom(ctx, atom);
-                        goto exception;
+                        GOTO_EXCEPTION;
                     } 
                     val = JS_UNDEFINED;
                 } else {
@@ -1822,7 +1829,7 @@ done:
                 }
                 JS_FreeAtom(ctx, atom);
                 if (unlikely(JS_IsException(val)))
-                    goto exception;
+                    GOTO_EXCEPTION;
                 sp[0] = val;
                 sp++;
             }
@@ -1835,11 +1842,11 @@ done:
                 sf->cur_pc = pc;
                 atom = JS_ValueToAtom(ctx, sp[-1]);
                 if (unlikely(atom == JS_ATOM_NULL))
-                    goto exception;
+                    GOTO_EXCEPTION;
                 val = JS_GetPropertyInternal(ctx, sp[-2], atom, sp[-3], FALSE);
                 JS_FreeAtom(ctx, atom);
                 if (unlikely(JS_IsException(val)))
-                    goto exception;
+                    GOTO_EXCEPTION;
                 JS_FreeValue(ctx, sp[-1]);
                 JS_FreeValue(ctx, sp[-2]);
                 JS_FreeValue(ctx, sp[-3]);
@@ -1857,7 +1864,7 @@ done:
                 JS_FreeValue(ctx, sp[-3]);
                 sp -= 3;
                 if (unlikely(ret < 0))
-                    goto exception;
+                    GOTO_EXCEPTION;
             }
             BREAK;
 
@@ -1868,12 +1875,12 @@ done:
                 sf->cur_pc = pc;
                 atom = JS_ValueToAtom(ctx, sp[-2]);
                 if (unlikely(atom == JS_ATOM_NULL))
-                    goto exception;
+                    GOTO_EXCEPTION;
                 if (unlikely(JS_IsUndefined(sp[-3]))) {
                     if (is_strict_mode(ctx)) {
                         JS_ThrowReferenceErrorNotDefined(ctx, atom);
                         JS_FreeAtom(ctx, atom);
-                        goto exception;
+                        GOTO_EXCEPTION;
                     } else {
                         sp[-3] = JS_DupValue(ctx, ctx->global_obj);
                     }
@@ -1882,12 +1889,12 @@ done:
                 if (unlikely(ret <= 0)) {
                     if (unlikely(ret < 0)) {
                         JS_FreeAtom(ctx, atom);
-                        goto exception;
+                        GOTO_EXCEPTION;
                     }
                     if (is_strict_mode(ctx)) {
                         JS_ThrowReferenceErrorNotDefined(ctx, atom);
                         JS_FreeAtom(ctx, atom);
-                        goto exception;
+                        GOTO_EXCEPTION;
                     }
                 }
                 ret = JS_SetPropertyInternal(ctx, sp[-3], atom, sp[-1], sp[-3], JS_PROP_THROW_STRICT);
@@ -1896,7 +1903,7 @@ done:
                 JS_FreeValue(ctx, sp[-3]);
                 sp -= 3;
                 if (unlikely(ret < 0))
-                    goto exception;
+                    GOTO_EXCEPTION;
             }
             BREAK;
 
@@ -1907,11 +1914,11 @@ done:
                 sf->cur_pc = pc;
                 if (JS_VALUE_GET_TAG(sp[-3]) != JS_TAG_OBJECT) {
                     JS_ThrowTypeErrorNotAnObject(ctx);
-                    goto exception;
+                    GOTO_EXCEPTION;
                 }
                 atom = JS_ValueToAtom(ctx, sp[-2]);
                 if (unlikely(atom == JS_ATOM_NULL))
-                    goto exception;
+                    GOTO_EXCEPTION;
                 ret = JS_SetPropertyInternal(ctx, sp[-3], atom, sp[-1], sp[-4],
                                              JS_PROP_THROW_STRICT);
                 JS_FreeAtom(ctx, atom);
@@ -1920,7 +1927,7 @@ done:
                 JS_FreeValue(ctx, sp[-2]);
                 sp -= 4;
                 if (ret < 0)
-                    goto exception;
+                    GOTO_EXCEPTION;
             }
             BREAK;
 
@@ -1931,7 +1938,7 @@ done:
                                                   JS_PROP_C_W_E | JS_PROP_THROW);
                 sp -= 1;
                 if (unlikely(ret < 0))
-                    goto exception;
+                    GOTO_EXCEPTION;
             }
             BREAK;
 
@@ -1939,7 +1946,7 @@ done:
             {
                 sf->cur_pc = pc;
                 if (js_append_enumerate(ctx, sp))
-                    goto exception;
+                    GOTO_EXCEPTION;
                 JS_FreeValue(ctx, *--sp);
             }
             BREAK;
@@ -1957,7 +1964,7 @@ done:
                 if (JS_CopyDataProperties(ctx, sp[-1 - (mask & 3)],
                                           sp[-1 - ((mask >> 2) & 7)],
                                           sp[-1 - ((mask >> 5) & 7)], 0))
-                    goto exception;
+                    GOTO_EXCEPTION;
             }
             BREAK;
 
@@ -1981,12 +1988,12 @@ done:
                     sp[-2] = JS_ConcatString(ctx, op1, op2);
                     sp--;
                     if (JS_IsException(sp[-1]))
-                        goto exception;
+                        GOTO_EXCEPTION;
                 } else {
                 add_slow:
                     sf->cur_pc = pc;
                     if (js_add_slow(ctx, sp))
-                        goto exception;
+                        GOTO_EXCEPTION;
                     sp--;
                 }
             }
@@ -2017,13 +2024,13 @@ done:
                     sf->cur_pc = pc;
                     op2 = JS_ToPrimitiveFree(ctx, op2, HINT_NONE);
                     if (JS_IsException(op2))
-                        goto exception;
+                        GOTO_EXCEPTION;
                     if (JS_ConcatStringInPlace(ctx, JS_VALUE_GET_STRING(*pv), op2)) {
                         JS_FreeValue(ctx, op2);
                     } else {
                         op2 = JS_ConcatString(ctx, JS_DupValue(ctx, *pv), op2);
                         if (JS_IsException(op2))
-                            goto exception;
+                            GOTO_EXCEPTION;
                         set_value(ctx, pv, op2);
                     }
                 } else {
@@ -2036,7 +2043,7 @@ done:
                     ops[1] = op2;
                     sp--;
                     if (js_add_slow(ctx, ops + 2))
-                        goto exception;
+                        GOTO_EXCEPTION;
                     set_value(ctx, pv, ops[0]);
                 }
             }
@@ -2061,7 +2068,7 @@ done:
                   binary_arith_slow_sub:
                     sf->cur_pc = pc;
                     if (js_binary_arith_slow(ctx, sp, OP_sub))
-                        goto exception;
+                        GOTO_EXCEPTION;
                     sp--;
                 }
             }
@@ -2097,7 +2104,7 @@ done:
                 } else {
                     sf->cur_pc = pc;
                     if (js_binary_arith_slow(ctx, sp, OP_mul))
-                        goto exception;
+                        GOTO_EXCEPTION;
                     sp--;
                 }
             }
@@ -2116,7 +2123,7 @@ done:
                 } else {
                     sf->cur_pc = pc;
                     if (js_binary_arith_slow(ctx, sp, OP_div))
-                        goto exception;
+                        GOTO_EXCEPTION;
                     sp--;
                 }
             }
@@ -2141,7 +2148,7 @@ done:
                   binary_arith_slow_mod:
                     sf->cur_pc = pc;
                     if (js_binary_arith_slow(ctx, sp, OP_mod))
-                        goto exception;
+                        GOTO_EXCEPTION;
                     sp--;
                 }
             }
@@ -2149,7 +2156,7 @@ done:
         CASE(OP_pow):
             sf->cur_pc = pc;
             if (js_binary_arith_slow(ctx, sp, OP_pow))
-                goto exception;
+                GOTO_EXCEPTION;
             sp--;
             BREAK;
 
@@ -2163,7 +2170,7 @@ done:
                 } else {
                     sf->cur_pc = pc;
                     if (js_unary_arith_slow(ctx, sp, OP_plus))
-                        goto exception;
+                        GOTO_EXCEPTION;
                 }
             }
             BREAK;
@@ -2194,7 +2201,7 @@ done:
                 } else {
                     sf->cur_pc = pc;
                     if (js_unary_arith_slow(ctx, sp, OP_neg))
-                        goto exception;
+                        GOTO_EXCEPTION;
                 }
             }
             BREAK;
@@ -2212,7 +2219,7 @@ done:
                 inc_slow:
                     sf->cur_pc = pc;
                     if (js_unary_arith_slow(ctx, sp, OP_inc))
-                        goto exception;
+                        GOTO_EXCEPTION;
                 }
             }
             BREAK;
@@ -2230,7 +2237,7 @@ done:
                 dec_slow:
                     sf->cur_pc = pc;
                     if (js_unary_arith_slow(ctx, sp, OP_dec))
-                        goto exception;
+                        GOTO_EXCEPTION;
                 }
             }
             BREAK;
@@ -2240,7 +2247,7 @@ done:
             int opcode_ = pc[-1];
             sf->cur_pc = pc;
             if (js_post_inc_slow(ctx, sp, opcode_))
-                goto exception;
+                GOTO_EXCEPTION;
             sp++;
             BREAK;
           }
@@ -2265,7 +2272,7 @@ done:
                        be destroyed before JS code accesses it */
                     op1 = JS_DupValue(ctx, op1);
                     if (js_unary_arith_slow(ctx, &op1 + 1, OP_inc))
-                        goto exception;
+                        GOTO_EXCEPTION;
                     set_value(ctx, &var_buf[idx], op1);
                 }
             }
@@ -2291,7 +2298,7 @@ done:
                        be destroyed before JS code accesses it */
                     op1 = JS_DupValue(ctx, op1);
                     if (js_unary_arith_slow(ctx, &op1 + 1, OP_dec))
-                        goto exception;
+                        GOTO_EXCEPTION;
                     set_value(ctx, &var_buf[idx], op1);
                 }
             }
@@ -2305,7 +2312,7 @@ done:
                 } else {
                     sf->cur_pc = pc;
                     if (js_not_slow(ctx, sp))
-                        goto exception;
+                        GOTO_EXCEPTION;
                 }
             }
             BREAK;
@@ -2325,7 +2332,7 @@ done:
                 } else {
                     sf->cur_pc = pc;
                     if (js_binary_logic_slow(ctx, sp, OP_shl))
-                        goto exception;
+                        GOTO_EXCEPTION;
                     sp--;
                 }
             }
@@ -2346,7 +2353,7 @@ done:
                 } else {
                     sf->cur_pc = pc;
                     if (js_shr_slow(ctx, sp))
-                        goto exception;
+                        GOTO_EXCEPTION;
                     sp--;
                 }
             }
@@ -2366,7 +2373,7 @@ done:
                 } else {
                     sf->cur_pc = pc;
                     if (js_binary_logic_slow(ctx, sp, OP_sar))
-                        goto exception;
+                        GOTO_EXCEPTION;
                     sp--;
                 }
             }
@@ -2384,7 +2391,7 @@ done:
                 } else {
                     sf->cur_pc = pc;
                     if (js_binary_logic_slow(ctx, sp, OP_and))
-                        goto exception;
+                        GOTO_EXCEPTION;
                     sp--;
                 }
             }
@@ -2402,7 +2409,7 @@ done:
                 } else {
                     sf->cur_pc = pc;
                     if (js_binary_logic_slow(ctx, sp, OP_or))
-                        goto exception;
+                        GOTO_EXCEPTION;
                     sp--;
                 }
             }
@@ -2420,7 +2427,7 @@ done:
                 } else {
                     sf->cur_pc = pc;
                     if (js_binary_logic_slow(ctx, sp, OP_xor))
-                        goto exception;
+                        GOTO_EXCEPTION;
                     sp--;
                 }
             }
@@ -2439,7 +2446,7 @@ done:
                 } else {                                                \
                     sf->cur_pc = pc;                                    \
                     if (slow_call)                                      \
-                        goto exception;                                 \
+                        GOTO_EXCEPTION;                                 \
                     sp--;                                               \
                 }                                                       \
                 }                                                       \
@@ -2457,19 +2464,19 @@ done:
         CASE(OP_in):
             sf->cur_pc = pc;
             if (js_operator_in(ctx, sp))
-                goto exception;
+                GOTO_EXCEPTION;
             sp--;
             BREAK;
         CASE(OP_private_in):
             sf->cur_pc = pc;
             if (js_operator_private_in(ctx, sp))
-                goto exception;
+                GOTO_EXCEPTION;
             sp--;
             BREAK;
         CASE(OP_instanceof):
             sf->cur_pc = pc;
             if (js_operator_instanceof(ctx, sp))
-                goto exception;
+                GOTO_EXCEPTION;
             sp--;
             BREAK;
         CASE(OP_typeof):
@@ -2486,7 +2493,7 @@ done:
         CASE(OP_delete):
             sf->cur_pc = pc;
             if (js_operator_delete(ctx, sp))
-                goto exception;
+                GOTO_EXCEPTION;
             sp--;
             BREAK;
         CASE(OP_delete_var):
@@ -2500,7 +2507,7 @@ done:
 
                 ret = JS_DeleteGlobalVar(ctx, atom);
                 if (unlikely(ret < 0))
-                    goto exception;
+                    GOTO_EXCEPTION;
                 *sp++ = JS_NewBool(ctx, ret);
             }
             BREAK;
@@ -2510,7 +2517,7 @@ done:
                 sf->cur_pc = pc;
                 ret_val = JS_ToObject(ctx, sp[-1]);
                 if (JS_IsException(ret_val))
-                    goto exception;
+                    GOTO_EXCEPTION;
                 JS_FreeValue(ctx, sp[-1]);
                 sp[-1] = ret_val;
             }
@@ -2526,7 +2533,7 @@ done:
                 sf->cur_pc = pc;
                 ret_val = JS_ToPropertyKey(ctx, sp[-1]);
                 if (JS_IsException(ret_val))
-                    goto exception;
+                    GOTO_EXCEPTION;
                 JS_FreeValue(ctx, sp[-1]);
                 sp[-1] = ret_val;
                 break;
@@ -2538,7 +2545,7 @@ done:
             if (JS_VALUE_GET_TAG(sp[-1]) != JS_TAG_STRING) {
                 ret_val = JS_ToString(ctx, sp[-1]);
                 if (JS_IsException(ret_val))
-                    goto exception;
+                    GOTO_EXCEPTION;
                 JS_FreeValue(ctx, sp[-1]);
                 sp[-1] = ret_val;
             }
@@ -2564,12 +2571,12 @@ done:
                 obj = sp[-1];
                 ret = JS_HasProperty(ctx, obj, atom);
                 if (unlikely(ret < 0))
-                    goto exception;
+                    GOTO_EXCEPTION;
                 if (ret) {
                     if (is_with) {
                         ret = js_has_unscopable(ctx, obj, atom);
                         if (unlikely(ret < 0))
-                            goto exception;
+                            GOTO_EXCEPTION;
                         if (ret)
                             goto no_with;
                     }
@@ -2579,16 +2586,16 @@ done:
                         ret = JS_HasProperty(ctx, obj, atom);
                         if (unlikely(ret <= 0)) {
                             if (ret < 0)
-                                goto exception;
+                                GOTO_EXCEPTION;
                             if (is_strict_mode(ctx)) {
                                 JS_ThrowReferenceErrorNotDefined(ctx, atom);
-                                goto exception;
+                                GOTO_EXCEPTION;
                             } 
                             val = JS_UNDEFINED;
                         } else {
                             val = JS_GetProperty(ctx, obj, atom);
                             if (unlikely(JS_IsException(val)))
-                                goto exception;
+                                GOTO_EXCEPTION;
                         }
                         set_value(ctx, &sp[-1], val);
                         break;
@@ -2597,10 +2604,10 @@ done:
                         ret = JS_HasProperty(ctx, obj, atom);
                         if (unlikely(ret <= 0)) {
                             if (ret < 0)
-                                goto exception;
+                                GOTO_EXCEPTION;
                             if (is_strict_mode(ctx)) {
                                 JS_ThrowReferenceErrorNotDefined(ctx, atom);
-                                goto exception;
+                                GOTO_EXCEPTION;
                             } 
                         }
                         ret = JS_SetPropertyInternal(ctx, obj, atom, sp[-2], obj,
@@ -2608,12 +2615,12 @@ done:
                         JS_FreeValue(ctx, sp[-1]);
                         sp -= 2;
                         if (unlikely(ret < 0))
-                            goto exception;
+                            GOTO_EXCEPTION;
                         break;
                     case OP_with_delete_var:
                         ret = JS_DeleteProperty(ctx, obj, atom, 0);
                         if (unlikely(ret < 0))
-                            goto exception;
+                            GOTO_EXCEPTION;
                         JS_FreeValue(ctx, sp[-1]);
                         sp[-1] = JS_NewBool(ctx, ret);
                         break;
@@ -2626,13 +2633,13 @@ done:
                         /* in Object Environment Records, GetBindingValue() calls HasProperty() */
                         ret = JS_HasProperty(ctx, obj, atom);
                         if (unlikely(ret < 0))
-                            goto exception;
+                            GOTO_EXCEPTION;
                         if (!ret) {
                             val = JS_UNDEFINED;
                         } else {
                             val = JS_GetProperty(ctx, obj, atom);
                             if (unlikely(JS_IsException(val)))
-                                goto exception;
+                                GOTO_EXCEPTION;
                         }
                         *sp++ = val;
                         break;
@@ -2649,20 +2656,20 @@ done:
 
         CASE(OP_await):
             ret_val = JS_NewInt32(ctx, FUNC_RET_AWAIT);
-            goto done_generator;
+            GOTO_DONE_GENERATOR;
         CASE(OP_yield):
             ret_val = JS_NewInt32(ctx, FUNC_RET_YIELD);
-            goto done_generator;
+            GOTO_DONE_GENERATOR;
         CASE(OP_yield_star):
         CASE(OP_async_yield_star):
             ret_val = JS_NewInt32(ctx, FUNC_RET_YIELD_STAR);
-            goto done_generator;
+            GOTO_DONE_GENERATOR;
         CASE(OP_return_async):
             ret_val = JS_UNDEFINED;
-            goto done_generator;
+            GOTO_DONE_GENERATOR;
         CASE(OP_initial_yield):
             ret_val = JS_NewInt32(ctx, FUNC_RET_INITIAL_YIELD);
-            goto done_generator;
+            GOTO_DONE_GENERATOR;
 
         CASE(OP_nop):
             BREAK;
@@ -2716,9 +2723,9 @@ done:
             int opcode_ = pc[-1];
             JS_ThrowInternalError(ctx, "invalid opcode: pc=%u opcode=0x%02x",
                                   (int)(pc - b->byte_code_buf - 1), opcode_);
-            goto exception;
+            GOTO_EXCEPTION;
           }
         }
     }
-    goto exception;
+    GOTO_EXCEPTION;
 }

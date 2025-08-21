@@ -2050,7 +2050,7 @@ done:
                     int64_t r;
                     r = (int64_t)JS_VALUE_GET_INT(op1) - JS_VALUE_GET_INT(op2);
                     if (unlikely((int)r != r))
-                        goto binary_arith_slow;
+                        goto binary_arith_slow_sub;
                     sp[-2] = JS_NewInt32(ctx, r);
                     sp--;
                 } else if (JS_VALUE_IS_BOTH_FLOAT(op1, op2)) {
@@ -2058,7 +2058,11 @@ done:
                                              JS_VALUE_GET_FLOAT64(op2));
                     sp--;
                 } else {
-                    goto binary_arith_slow;
+                  binary_arith_slow_sub:
+                    sf->cur_pc = pc;
+                    if (js_binary_arith_slow(ctx, sp, OP_sub))
+                        goto exception;
+                    sp--;
                 }
             }
             BREAK;
@@ -2091,7 +2095,10 @@ done:
                     sp[-2] = __JS_NewFloat64(ctx, d);
                     sp--;
                 } else {
-                    goto binary_arith_slow;
+                    sf->cur_pc = pc;
+                    if (js_binary_arith_slow(ctx, sp, OP_mul))
+                        goto exception;
+                    sp--;
                 }
             }
             BREAK;
@@ -2107,7 +2114,10 @@ done:
                     sp[-2] = JS_NewFloat64(ctx, (double)v1 / (double)v2);
                     sp--;
                 } else {
-                    goto binary_arith_slow;
+                    sf->cur_pc = pc;
+                    if (js_binary_arith_slow(ctx, sp, OP_div))
+                        goto exception;
+                    sp--;
                 }
             }
             BREAK;
@@ -2123,19 +2133,22 @@ done:
                     /* We must avoid v2 = 0, v1 = INT32_MIN and v2 =
                        -1 and the cases where the result is -0. */
                     if (unlikely(v1 < 0 || v2 <= 0))
-                        goto binary_arith_slow;
+                        goto binary_arith_slow_mod;
                     r = v1 % v2;
                     sp[-2] = JS_NewInt32(ctx, r);
                     sp--;
                 } else {
-                    goto binary_arith_slow;
+                  binary_arith_slow_mod:
+                    sf->cur_pc = pc;
+                    if (js_binary_arith_slow(ctx, sp, OP_mod))
+                        goto exception;
+                    sp--;
                 }
             }
             BREAK;
         CASE(OP_pow):
-        binary_arith_slow:
             sf->cur_pc = pc;
-            if (js_binary_arith_slow(ctx, sp, opcode))
+            if (js_binary_arith_slow(ctx, sp, OP_pow))
                 goto exception;
             sp--;
             BREAK;

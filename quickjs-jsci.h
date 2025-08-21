@@ -178,59 +178,6 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
     ctx = b->realm; /* set the current realm */
     goto restart;
 
-exception:
-    if (is_backtrace_needed(ctx, rt->current_exception)) {
-        /* add the backtrace information now (it is not done
-           before if the exception happens in a bytecode
-           operation */
-        sf->cur_pc = pc;
-        build_backtrace(ctx, rt->current_exception, NULL, 0, 0, 0);
-    }
-    if (!rt->current_exception_is_uncatchable) {
-        while (sp > stack_buf) {
-            JSValue val = *--sp;
-            JS_FreeValue(ctx, val);
-            if (JS_VALUE_GET_TAG(val) == JS_TAG_CATCH_OFFSET) {
-                int pos = JS_VALUE_GET_INT(val);
-                if (pos == 0) {
-                    /* enumerator: close it with a throw */
-                    JS_FreeValue(ctx, sp[-1]); /* drop the next method */
-                    sp--;
-                    JS_IteratorClose(ctx, sp[-1], TRUE);
-                } else {
-                    *sp++ = rt->current_exception;
-                    rt->current_exception = JS_UNINITIALIZED;
-                    pc = b->byte_code_buf + pos;
-                    goto restart;
-                }
-            }
-        }
-    }
-    ret_val = JS_EXCEPTION;
-    /* the local variables are freed by the caller in the generator
-       case. Hence the label 'done' should never be reached in a
-       generator function. */
-    if (b->func_kind != JS_FUNC_NORMAL)
-        GOTO_DONE_GENERATOR;
-
-done:
-    if (unlikely(!list_empty(&sf->var_ref_list))) {
-        /* variable references reference the stack: must close them */
-        close_var_refs(rt, sf);
-    }
-    /* free the local variables and stack */
-    for(pval = local_buf; pval < sp; pval++) {
-        JS_FreeValue(ctx, *pval);
-    }
-    rt->current_stack_frame = sf->prev_frame;
-    return ret_val;
-
-done_generator:
-    sf->cur_pc = pc;
-    sf->cur_sp = sp;
-    rt->current_stack_frame = sf->prev_frame;
-    return ret_val;
-
 /*****************************************************************************/
 
 #if !TAIL_DISPATCH
@@ -2851,6 +2798,62 @@ restart:
     }  /* for(;;) */
     GOTO_EXCEPTION;
 #endif
+
+/*****************************************************************************/
+
+exception:
+    if (is_backtrace_needed(ctx, rt->current_exception)) {
+        /* add the backtrace information now (it is not done
+           before if the exception happens in a bytecode
+           operation */
+        sf->cur_pc = pc;
+        build_backtrace(ctx, rt->current_exception, NULL, 0, 0, 0);
+    }
+    if (!rt->current_exception_is_uncatchable) {
+        while (sp > stack_buf) {
+            JSValue val = *--sp;
+            JS_FreeValue(ctx, val);
+            if (JS_VALUE_GET_TAG(val) == JS_TAG_CATCH_OFFSET) {
+                int pos = JS_VALUE_GET_INT(val);
+                if (pos == 0) {
+                    /* enumerator: close it with a throw */
+                    JS_FreeValue(ctx, sp[-1]); /* drop the next method */
+                    sp--;
+                    JS_IteratorClose(ctx, sp[-1], TRUE);
+                } else {
+                    *sp++ = rt->current_exception;
+                    rt->current_exception = JS_UNINITIALIZED;
+                    pc = b->byte_code_buf + pos;
+                    goto restart;
+                }
+            }
+        }
+    }
+    ret_val = JS_EXCEPTION;
+    /* the local variables are freed by the caller in the generator
+       case. Hence the label 'done' should never be reached in a
+       generator function. */
+    if (b->func_kind != JS_FUNC_NORMAL)
+        GOTO_DONE_GENERATOR;
+
+done:
+    if (unlikely(!list_empty(&sf->var_ref_list))) {
+        /* variable references reference the stack: must close them */
+        close_var_refs(rt, sf);
+    }
+    /* free the local variables and stack */
+    for(pval = local_buf; pval < sp; pval++) {
+        JS_FreeValue(ctx, *pval);
+    }
+    rt->current_stack_frame = sf->prev_frame;
+    return ret_val;
+
+done_generator:
+    sf->cur_pc = pc;
+    sf->cur_sp = sp;
+    rt->current_stack_frame = sf->prev_frame;
+    return ret_val;
+
 }
 
 #undef HANDLER

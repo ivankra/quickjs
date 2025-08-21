@@ -65,6 +65,9 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
     restart: return jsci_jump_table[*pc](TAIL_CALL_ARGS(pc+1)); \
     exception: return jsci_exception(TAIL_CALL_ARGS(pc)); \
     }  /* end JS_CallInternal */
+#define EXCEPTION_HANDLER \
+    PRESERVE_NONE static JSValue jsci_exception(TAIL_CALL_PARAMS) { \
+        JSRuntime *rt = caller_ctx->rt;
 
 #elif !DIRECT_DISPATCH
 #define SWITCH(pc)      switch (*pc++)
@@ -2806,6 +2809,8 @@ restart:
 /*****************************************************************************/
 
 exception:
+  {
+    JSRuntime *rt = caller_ctx->rt;
     if (is_backtrace_needed(ctx, rt->current_exception)) {
         /* add the backtrace information now (it is not done
            before if the exception happens in a bytecode
@@ -2839,8 +2844,11 @@ exception:
        generator function. */
     if (b->func_kind != JS_FUNC_NORMAL)
         GOTO_DONE_GENERATOR;
+  }
 
 done:
+  {
+    JSRuntime *rt = caller_ctx->rt;
     if (unlikely(!list_empty(&sf->var_ref_list))) {
         /* variable references reference the stack: must close them */
         close_var_refs(rt, sf);
@@ -2849,14 +2857,18 @@ done:
     for(pval = local_buf; pval < sp; pval++) {
         JS_FreeValue(ctx, *pval);
     }
-    rt->current_stack_frame = sf->prev_frame;
+    caller_ctx->rt->current_stack_frame = sf->prev_frame;
     return ret_val;
+  }
 
 done_generator:
+  {
+    JSRuntime *rt = caller_ctx->rt;
     sf->cur_pc = pc;
     sf->cur_sp = sp;
     rt->current_stack_frame = sf->prev_frame;
     return ret_val;
+  }
 
 }
 

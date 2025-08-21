@@ -207,9 +207,6 @@ done_generator:
 
 restart:
     for(;;) {
-        int call_argc;
-        JSValue *call_argv;
-
         SWITCH(pc) {
         HANDLER(OP_push_i32) {
             *sp++ = JS_NewInt32(ctx, get_u32(pc));
@@ -343,7 +340,7 @@ restart:
                     break;
                 case OP_SPECIAL_OBJECT_HOME_OBJECT:
                     {
-                        JSObject *p_ = JS_VALUE_GET_OBJ(sf->cur_func);
+                        JSObject *p = JS_VALUE_GET_OBJ(sf->cur_func);
                         JSObject *p1;
                         p1 = p->u.func.home_object;
                         if (unlikely(!p1))
@@ -536,8 +533,8 @@ restart:
         HANDLER(OP_call3)
           {
             int opcode_ = pc[-1];
-            call_argc = opcode_ - OP_call0;
-            call_argv = sp - call_argc;
+            int call_argc = opcode_ - OP_call0;
+            JSValue *call_argv = sp - call_argc;
             sf->cur_pc = pc;
             ret_val = JS_CallInternal(ctx, call_argv[-1], JS_UNDEFINED,
                                       JS_UNDEFINED, call_argc, call_argv, 0);
@@ -551,31 +548,40 @@ restart:
           }
 #endif
         HANDLER(OP_call)
-        HANDLER(OP_tail_call)
             {
-                int opcode_ = pc[-1], i;
-                call_argc = get_u16(pc);
+                int i;
+                int call_argc = get_u16(pc);
+                JSValue *call_argv = sp - call_argc;
                 pc += 2;
-                call_argv = sp - call_argc;
                 sf->cur_pc = pc;
                 ret_val = JS_CallInternal(ctx, call_argv[-1], JS_UNDEFINED,
                                           JS_UNDEFINED, call_argc, call_argv, 0);
                 if (unlikely(JS_IsException(ret_val)))
                     GOTO_EXCEPTION;
-                if (opcode_ == OP_tail_call)
-                    GOTO_DONE;
                 for(i = -1; i < call_argc; i++)
                     JS_FreeValue(ctx, call_argv[i]);
                 sp -= call_argc + 1;
                 *sp++ = ret_val;
                 BREAK;
             }
+        HANDLER(OP_tail_call)
+            {
+                int call_argc = get_u16(pc);
+                JSValue *call_argv = sp - call_argc;
+                pc += 2;
+                sf->cur_pc = pc;
+                ret_val = JS_CallInternal(ctx, call_argv[-1], JS_UNDEFINED,
+                                          JS_UNDEFINED, call_argc, call_argv, 0);
+                if (unlikely(JS_IsException(ret_val)))
+                    GOTO_EXCEPTION;
+                GOTO_DONE;
+            }
         HANDLER(OP_call_constructor)
             {
                 int i;
-                call_argc = get_u16(pc);
+                int call_argc = get_u16(pc);
+                JSValue *call_argv = sp - call_argc;
                 pc += 2;
-                call_argv = sp - call_argc;
                 sf->cur_pc = pc;
                 ret_val = JS_CallConstructorInternal(ctx, call_argv[-2],
                                                      call_argv[-1],
@@ -589,30 +595,40 @@ restart:
                 BREAK;
             }
         HANDLER(OP_call_method)
-        HANDLER(OP_tail_call_method)
             {
-                int opcode_ = pc[-1], i;
-                call_argc = get_u16(pc);
+                int i;
+                int call_argc = get_u16(pc);
+                JSValue *call_argv = sp - call_argc;
                 pc += 2;
-                call_argv = sp - call_argc;
                 sf->cur_pc = pc;
                 ret_val = JS_CallInternal(ctx, call_argv[-1], call_argv[-2],
                                           JS_UNDEFINED, call_argc, call_argv, 0);
                 if (unlikely(JS_IsException(ret_val)))
                     GOTO_EXCEPTION;
-                if (opcode_ == OP_tail_call_method)
-                    GOTO_DONE;
                 for(i = -2; i < call_argc; i++)
                     JS_FreeValue(ctx, call_argv[i]);
                 sp -= call_argc + 2;
                 *sp++ = ret_val;
                 BREAK;
             }
+        HANDLER(OP_tail_call_method)
+            {
+                int i;
+                int call_argc = get_u16(pc);
+                JSValue *call_argv = sp - call_argc;
+                pc += 2;
+                sf->cur_pc = pc;
+                ret_val = JS_CallInternal(ctx, call_argv[-1], call_argv[-2],
+                                          JS_UNDEFINED, call_argc, call_argv, 0);
+                if (unlikely(JS_IsException(ret_val)))
+                    GOTO_EXCEPTION;
+                GOTO_DONE;
+            }
         HANDLER(OP_array_from)
             {
                 int i, ret;
-
-                call_argc = get_u16(pc);
+                int call_argc = get_u16(pc);
+                JSValue *call_argv;
                 pc += 2;
                 ret_val = JS_NewArray(ctx);
                 if (unlikely(JS_IsException(ret_val)))
@@ -759,10 +775,10 @@ restart:
                 JSValueConst obj;
                 int scope_idx;
                 int i;
-                call_argc = get_u16(pc);
+                int call_argc = get_u16(pc);
+                JSValue* call_argv = sp - call_argc;
                 scope_idx = get_u16(pc + 2) + ARG_SCOPE_END;
                 pc += 4;
-                call_argv = sp - call_argc;
                 sf->cur_pc = pc;
                 if (js_same_value(ctx, call_argv[-1], ctx->eval_obj)) {
                     if (call_argc >= 1)
@@ -868,16 +884,28 @@ restart:
             }
 
         HANDLER(OP_get_var_undef)
-        HANDLER(OP_get_var)
             {
-                int opcode_ = pc[-1];
                 JSValue val;
                 JSAtom atom;
                 atom = get_u32(pc);
                 pc += 4;
                 sf->cur_pc = pc;
 
-                val = JS_GetGlobalVar(ctx, atom, opcode_ - OP_get_var_undef);
+                val = JS_GetGlobalVar(ctx, atom, 0);
+                if (unlikely(JS_IsException(val)))
+                    GOTO_EXCEPTION;
+                *sp++ = val;
+                BREAK;
+            }
+        HANDLER(OP_get_var)
+            {
+                JSValue val;
+                JSAtom atom;
+                atom = get_u32(pc);
+                pc += 4;
+                sf->cur_pc = pc;
+
+                val = JS_GetGlobalVar(ctx, atom, 1);
                 if (unlikely(JS_IsException(val)))
                     GOTO_EXCEPTION;
                 *sp++ = val;
@@ -2268,11 +2296,17 @@ restart:
                 BREAK;
             }
         HANDLER(OP_post_inc)
+          {
+            sf->cur_pc = pc;
+            if (js_post_inc_slow(ctx, sp, OP_post_inc))
+                GOTO_EXCEPTION;
+            sp++;
+            BREAK;
+          }
         HANDLER(OP_post_dec)
           {
-            int opcode_ = pc[-1];
             sf->cur_pc = pc;
-            if (js_post_inc_slow(ctx, sp, opcode_))
+            if (js_post_inc_slow(ctx, sp, OP_post_dec))
                 GOTO_EXCEPTION;
             sp++;
             BREAK;

@@ -19,7 +19,7 @@
 #endif
 
 #define TAIL_DISPATCH 0
-#define TAIL_CALL_ARGS pc, sp, b, ctx, var_buf, arg_buf, var_refs, sf, caller_ctx, this_obj, new_target, argc, argv, flags
+#define TAIL_CALL_ARGS(pc) pc, sp, b, ctx, var_buf, arg_buf, var_refs, sf, ret_val, caller_ctx, this_obj, new_target, argc, argv, flags
 #define TAIL_CALL_PARAMS \
     const uint8_t *pc, \
     JSValue *sp, \
@@ -29,6 +29,7 @@
     JSValue *arg_buf, \
     JSVarRef **var_refs, \
     JSStackFrame *sf, \
+    JSValue ret_val, \
     JSContext *caller_ctx, \
     JSValueConst this_obj, \
     JSValueConst new_target, \
@@ -53,12 +54,15 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
     size_t alloca_size;
 
 #if TAIL_DISPATCH
-#define HANDLER(op)     case op:
-#define HANDLER_FALLTHROUGH(op, op2)  case op:
-#define BREAK           break
-#define GOTO_EXCEPTION  goto exception
-#define GOTO_DONE       goto done
-#define GOTO_DONE_GENERATOR  goto done_generator
+#define HANDLER(op)          PRESERVE_NONE static JSValue handle_##op(TAIL_CALL_PARAMS)
+#define HANDLER_FALLTHROUGH(op, op2)  \
+                             HANDLER(op) { \
+                                 MUSTTAIL return jsci_jump_table[op2](TAIL_CALL_ARGS(pc)); \
+                             }
+#define BREAK                MUSTTAIL return jsci_jump_table[*ip](TAIL_CALL_ARGS(pc+1))
+#define GOTO_EXCEPTION       MUSTTAIL return jsci_exception(TAIL_CALL_ARGS(pc))
+#define GOTO_DONE            MUSTTAIL return jsci_done(TAIL_CALL_ARGS(pc))
+#define GOTO_DONE_GENERATOR  MUSTTAIL return jsci_done_generator(TAIL_CALL_ARGS(pc))
 
 #elif !DIRECT_DISPATCH
 #define SWITCH(pc)      switch (*pc++)

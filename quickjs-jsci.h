@@ -2739,7 +2739,7 @@ restart:
             ret_val = JS_NewInt32(ctx, FUNC_RET_YIELD);
             GOTO_DONE_GENERATOR;
         }
-        HANDLER(OP_yield_star)
+        HANDLER_FALLTHROUGH(OP_yield_star, OP_async_yield_star)
         HANDLER(OP_async_yield_star) {
             ret_val = JS_NewInt32(ctx, FUNC_RET_YIELD_STAR);
             GOTO_DONE_GENERATOR;
@@ -2816,8 +2816,8 @@ restart:
                                   (int)(pc - b->byte_code_buf - 1), opcode_);
             GOTO_EXCEPTION;
           }
-        }
-    }
+        }  /* SWITCH(pc) */
+    }  /* for(;;) */
     GOTO_EXCEPTION;
 }
 

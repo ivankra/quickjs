@@ -16,7 +16,7 @@
 // Cold vars from: sf
 // Maybe move to stack frame: caller_ctx new_target flags
 #define TAIL_DISPATCH 1
-#define TAIL_CALL_ARGS(pc) pc, sp, b, ctx, var_buf, arg_buf, var_refs, sf, ret_val, caller_ctx, this_obj, new_target, argc, argv, flags, local_buf
+#define TAIL_CALL_ARGS(pc) pc, sp, b, ctx, var_buf, arg_buf, var_refs, sf, caller_ctx, this_obj, new_target, argc, argv, flags, local_buf
 #define TAIL_CALL_PARAMS \
     const uint8_t *pc, \
     JSValue *sp, \
@@ -26,7 +26,6 @@
     JSValue *arg_buf, \
     JSVarRef **var_refs, \
     JSStackFrame *sf, \
-    JSValue ret_val, \
     JSContext *caller_ctx, \
     JSValueConst this_obj, \
     JSValueConst new_target, \
@@ -36,6 +35,7 @@
     JSValue* local_buf
 
 #if TAIL_DISPATCH
+
 #define END_BRACE }
 PRESERVE_NONE static JSValue jsci_label_exception(TAIL_CALL_PARAMS);
 PRESERVE_NONE static JSValue jsci_label_done(TAIL_CALL_PARAMS);
@@ -89,7 +89,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
     JSStackFrame sf_s, *sf = &sf_s;
     const uint8_t *pc;
     int arg_allocated_size, i;
-    JSValue *local_buf, *stack_buf, *var_buf, *arg_buf, *sp, ret_val = JS_UNDEFINED, *pval;
+    JSValue *local_buf, *stack_buf, *var_buf, *arg_buf, *sp, *pval;
     JSVarRef **var_refs;
     size_t alloca_size;
 
@@ -553,14 +553,14 @@ restart:
             int i;
             JSValue *call_argv = sp - call_argc;
             sf->cur_pc = pc;
-            ret_val = JS_CallInternal(ctx, call_argv[-1], JS_UNDEFINED,
+            sf->ret_val = JS_CallInternal(ctx, call_argv[-1], JS_UNDEFINED,
                                       JS_UNDEFINED, call_argc, call_argv, 0);
-            if (unlikely(JS_IsException(ret_val)))
+            if (unlikely(JS_IsException(sf->ret_val)))
                 GOTO_LABEL(exception);
             for(i = -1; i < call_argc; i++)
                 JS_FreeValue(ctx, call_argv[i]);
             sp -= call_argc + 1;
-            *sp++ = ret_val;
+            *sp++ = sf->ret_val;
             BREAK;
           }
 #endif
@@ -571,14 +571,14 @@ restart:
                 JSValue *call_argv = sp - call_argc;
                 pc += 2;
                 sf->cur_pc = pc;
-                ret_val = JS_CallInternal(ctx, call_argv[-1], JS_UNDEFINED,
+                sf->ret_val = JS_CallInternal(ctx, call_argv[-1], JS_UNDEFINED,
                                           JS_UNDEFINED, call_argc, call_argv, 0);
-                if (unlikely(JS_IsException(ret_val)))
+                if (unlikely(JS_IsException(sf->ret_val)))
                     GOTO_LABEL(exception);
                 for(i = -1; i < call_argc; i++)
                     JS_FreeValue(ctx, call_argv[i]);
                 sp -= call_argc + 1;
-                *sp++ = ret_val;
+                *sp++ = sf->ret_val;
                 BREAK;
             }
         CASE(OP_tail_call)
@@ -587,9 +587,9 @@ restart:
                 JSValue *call_argv = sp - call_argc;
                 pc += 2;
                 sf->cur_pc = pc;
-                ret_val = JS_CallInternal(ctx, call_argv[-1], JS_UNDEFINED,
+                sf->ret_val = JS_CallInternal(ctx, call_argv[-1], JS_UNDEFINED,
                                           JS_UNDEFINED, call_argc, call_argv, 0);
-                if (unlikely(JS_IsException(ret_val)))
+                if (unlikely(JS_IsException(sf->ret_val)))
                     GOTO_LABEL(exception);
                 GOTO_LABEL(done);
             }
@@ -600,15 +600,15 @@ restart:
                 JSValue *call_argv = sp - call_argc;
                 pc += 2;
                 sf->cur_pc = pc;
-                ret_val = JS_CallConstructorInternal(ctx, call_argv[-2],
+                sf->ret_val = JS_CallConstructorInternal(ctx, call_argv[-2],
                                                      call_argv[-1],
                                                      call_argc, call_argv, 0);
-                if (unlikely(JS_IsException(ret_val)))
+                if (unlikely(JS_IsException(sf->ret_val)))
                     GOTO_LABEL(exception);
                 for(i = -2; i < call_argc; i++)
                     JS_FreeValue(ctx, call_argv[i]);
                 sp -= call_argc + 2;
-                *sp++ = ret_val;
+                *sp++ = sf->ret_val;
                 BREAK;
             }
         CASE(OP_call_method)
@@ -618,14 +618,14 @@ restart:
                 JSValue *call_argv = sp - call_argc;
                 pc += 2;
                 sf->cur_pc = pc;
-                ret_val = JS_CallInternal(ctx, call_argv[-1], call_argv[-2],
+                sf->ret_val = JS_CallInternal(ctx, call_argv[-1], call_argv[-2],
                                           JS_UNDEFINED, call_argc, call_argv, 0);
-                if (unlikely(JS_IsException(ret_val)))
+                if (unlikely(JS_IsException(sf->ret_val)))
                     GOTO_LABEL(exception);
                 for(i = -2; i < call_argc; i++)
                     JS_FreeValue(ctx, call_argv[i]);
                 sp -= call_argc + 2;
-                *sp++ = ret_val;
+                *sp++ = sf->ret_val;
                 BREAK;
             }
         CASE(OP_tail_call_method)
@@ -634,9 +634,9 @@ restart:
                 JSValue *call_argv = sp - call_argc;
                 pc += 2;
                 sf->cur_pc = pc;
-                ret_val = JS_CallInternal(ctx, call_argv[-1], call_argv[-2],
+                sf->ret_val = JS_CallInternal(ctx, call_argv[-1], call_argv[-2],
                                           JS_UNDEFINED, call_argc, call_argv, 0);
-                if (unlikely(JS_IsException(ret_val)))
+                if (unlikely(JS_IsException(sf->ret_val)))
                     GOTO_LABEL(exception);
                 GOTO_LABEL(done);
             }
@@ -646,21 +646,21 @@ restart:
                 int call_argc = get_u16(pc);
                 JSValue *call_argv;
                 pc += 2;
-                ret_val = JS_NewArray(ctx);
-                if (unlikely(JS_IsException(ret_val)))
+                sf->ret_val = JS_NewArray(ctx);
+                if (unlikely(JS_IsException(sf->ret_val)))
                     GOTO_LABEL(exception);
                 call_argv = sp - call_argc;
                 for(i = 0; i < call_argc; i++) {
-                    ret = JS_DefinePropertyValue(ctx, ret_val, __JS_AtomFromUInt32(i), call_argv[i],
+                    ret = JS_DefinePropertyValue(ctx, sf->ret_val, __JS_AtomFromUInt32(i), call_argv[i],
                                                  JS_PROP_C_W_E | JS_PROP_THROW);
                     call_argv[i] = JS_UNDEFINED;
                     if (ret < 0) {
-                        JS_FreeValue(ctx, ret_val);
+                        JS_FreeValue(ctx, sf->ret_val);
                         GOTO_LABEL(exception);
                     }
                 }
                 sp -= call_argc;
-                *sp++ = ret_val;
+                *sp++ = sf->ret_val;
                 BREAK;
             }
 
@@ -671,22 +671,22 @@ restart:
                 pc += 2;
                 sf->cur_pc = pc;
 
-                ret_val = js_function_apply(ctx, sp[-3], 2, (JSValueConst *)&sp[-2], magic);
-                if (unlikely(JS_IsException(ret_val)))
+                sf->ret_val = js_function_apply(ctx, sp[-3], 2, (JSValueConst *)&sp[-2], magic);
+                if (unlikely(JS_IsException(sf->ret_val)))
                     GOTO_LABEL(exception);
                 JS_FreeValue(ctx, sp[-3]);
                 JS_FreeValue(ctx, sp[-2]);
                 JS_FreeValue(ctx, sp[-1]);
                 sp -= 3;
-                *sp++ = ret_val;
+                *sp++ = sf->ret_val;
                 BREAK;
             }
         CASE(OP_return) {
-            ret_val = *--sp;
+            sf->ret_val = *--sp;
             GOTO_LABEL(done);
         }
         CASE(OP_return_undef) {
-            ret_val = JS_UNDEFINED;
+            sf->ret_val = JS_UNDEFINED;
             GOTO_LABEL(done);
         }
 
@@ -801,18 +801,18 @@ restart:
                         obj = call_argv[0];
                     else
                         obj = JS_UNDEFINED;
-                    ret_val = JS_EvalObject(ctx, JS_UNDEFINED, obj,
+                    sf->ret_val = JS_EvalObject(ctx, JS_UNDEFINED, obj,
                                             JS_EVAL_TYPE_DIRECT, scope_idx);
                 } else {
-                    ret_val = JS_CallInternal(ctx, call_argv[-1], JS_UNDEFINED,
+                    sf->ret_val = JS_CallInternal(ctx, call_argv[-1], JS_UNDEFINED,
                                               JS_UNDEFINED, call_argc, call_argv, 0);
                 }
-                if (unlikely(JS_IsException(ret_val)))
+                if (unlikely(JS_IsException(sf->ret_val)))
                     GOTO_LABEL(exception);
                 for(i = -1; i < call_argc; i++)
                     JS_FreeValue(ctx, call_argv[i]);
                 sp -= call_argc + 1;
-                *sp++ = ret_val;
+                *sp++ = sf->ret_val;
                 BREAK;
             }
             /* could merge with OP_apply */
@@ -834,19 +834,19 @@ restart:
                         obj = tab[0];
                     else
                         obj = JS_UNDEFINED;
-                    ret_val = JS_EvalObject(ctx, JS_UNDEFINED, obj,
+                    sf->ret_val = JS_EvalObject(ctx, JS_UNDEFINED, obj,
                                             JS_EVAL_TYPE_DIRECT, scope_idx);
                 } else {
-                    ret_val = JS_Call(ctx, sp[-2], JS_UNDEFINED, len,
+                    sf->ret_val = JS_Call(ctx, sp[-2], JS_UNDEFINED, len,
                                       (JSValueConst *)tab);
                 }
                 free_arg_list(ctx, tab, len);
-                if (unlikely(JS_IsException(ret_val)))
+                if (unlikely(JS_IsException(sf->ret_val)))
                     GOTO_LABEL(exception);
                 JS_FreeValue(ctx, sp[-2]);
                 JS_FreeValue(ctx, sp[-1]);
                 sp -= 2;
-                *sp++ = ret_val;
+                *sp++ = sf->ret_val;
                 BREAK;
             }
 
@@ -1515,17 +1515,17 @@ restart:
             {
                 JSValue *stack_buf = sf->var_buf + b->var_count;
                 /* catch_offset ... ret_val -> ret_eval */
-                ret_val = *--sp;
+                sf->ret_val = *--sp;
                 while (sp > stack_buf &&
                        JS_VALUE_GET_TAG(sp[-1]) != JS_TAG_CATCH_OFFSET) {
                     JS_FreeValue(ctx, *--sp);
                 }
                 if (unlikely(sp == stack_buf)) {
                     JS_ThrowInternalError(ctx, "nip_catch");
-                    JS_FreeValue(ctx, ret_val);
+                    JS_FreeValue(ctx, sf->ret_val);
                     GOTO_LABEL(exception);
                 }
-                sp[-1] = ret_val;
+                sp[-1] = sf->ret_val;
                 BREAK;
             }
 
@@ -1864,11 +1864,11 @@ restart:
                         GOTO_LABEL(exception);
                     }
                     sf->cur_pc = pc;
-                    ret_val = JS_ToPropertyKey(ctx, sp[-1]);
-                    if (JS_IsException(ret_val))
+                    sf->ret_val = JS_ToPropertyKey(ctx, sp[-1]);
+                    if (JS_IsException(sf->ret_val))
                         GOTO_LABEL(exception);
                     JS_FreeValue(ctx, sp[-1]);
-                    sp[-1] = ret_val;
+                    sp[-1] = sf->ret_val;
                     break;
                 }
                 sf->cur_pc = pc;
@@ -2605,11 +2605,11 @@ restart:
         CASE(OP_to_object) {
             if (JS_VALUE_GET_TAG(sp[-1]) != JS_TAG_OBJECT) {
                 sf->cur_pc = pc;
-                ret_val = JS_ToObject(ctx, sp[-1]);
-                if (JS_IsException(ret_val))
+                sf->ret_val = JS_ToObject(ctx, sp[-1]);
+                if (JS_IsException(sf->ret_val))
                     GOTO_LABEL(exception);
                 JS_FreeValue(ctx, sp[-1]);
-                sp[-1] = ret_val;
+                sp[-1] = sf->ret_val;
             }
             BREAK;
         }
@@ -2622,11 +2622,11 @@ restart:
                 break;
             default:
                 sf->cur_pc = pc;
-                ret_val = JS_ToPropertyKey(ctx, sp[-1]);
-                if (JS_IsException(ret_val))
+                sf->ret_val = JS_ToPropertyKey(ctx, sp[-1]);
+                if (JS_IsException(sf->ret_val))
                     GOTO_LABEL(exception);
                 JS_FreeValue(ctx, sp[-1]);
-                sp[-1] = ret_val;
+                sp[-1] = sf->ret_val;
                 break;
             }
             BREAK;
@@ -2747,24 +2747,24 @@ restart:
             }
 
         CASE(OP_await) {
-            ret_val = JS_NewInt32(ctx, FUNC_RET_AWAIT);
+            sf->ret_val = JS_NewInt32(ctx, FUNC_RET_AWAIT);
             GOTO_LABEL(done_generator);
         }
         CASE(OP_yield) {
-            ret_val = JS_NewInt32(ctx, FUNC_RET_YIELD);
+            sf->ret_val = JS_NewInt32(ctx, FUNC_RET_YIELD);
             GOTO_LABEL(done_generator);
         }
         CASE_FALLTHROUGH(OP_yield_star, OP_async_yield_star)
         CASE(OP_async_yield_star) {
-            ret_val = JS_NewInt32(ctx, FUNC_RET_YIELD_STAR);
+            sf->ret_val = JS_NewInt32(ctx, FUNC_RET_YIELD_STAR);
             GOTO_LABEL(done_generator);
         }
         CASE(OP_return_async) {
-            ret_val = JS_UNDEFINED;
+            sf->ret_val = JS_UNDEFINED;
             GOTO_LABEL(done_generator);
         }
         CASE(OP_initial_yield) {
-            ret_val = JS_NewInt32(ctx, FUNC_RET_INITIAL_YIELD);
+            sf->ret_val = JS_NewInt32(ctx, FUNC_RET_INITIAL_YIELD);
             GOTO_LABEL(done_generator);
         }
 
@@ -2874,7 +2874,7 @@ exception:
             }
         }
     }
-    ret_val = JS_EXCEPTION;
+    sf->ret_val = JS_EXCEPTION;
     /* the local variables are freed by the caller in the generator
        case. Hence the label 'done' should never be reached in a
        generator function. */
@@ -2902,7 +2902,7 @@ done:
         JS_FreeValue(ctx, *pval);
     }
     caller_ctx->rt->current_stack_frame = sf->prev_frame;
-    return ret_val;
+    return sf->ret_val;
 #if TAIL_DISPATCH
 }
 #endif
@@ -2916,7 +2916,7 @@ done_generator:
     sf->cur_pc = pc;
     sf->cur_sp = sp;
     rt->current_stack_frame = sf->prev_frame;
-    return ret_val;
+    return sf->ret_val;
 #if TAIL_DISPATCH
 }
 #endif

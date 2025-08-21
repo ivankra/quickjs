@@ -15,18 +15,16 @@
 // Not needed in interpreter loop: func_obj rt p sf_s, arg_allocated_size i local_buf stack_buf pval alloca_size
 // Cold vars from: sf
 #define TAIL_DISPATCH 1
-#define TAIL_CALL_ARGS(pc) pc, sp, b, ctx, var_buf, arg_buf, var_refs, sf, argc, argv
+#define TAIL_CALL_ARGS(pc) pc, sp, b, sf, ctx, var_buf, arg_buf, var_refs
 #define TAIL_CALL_PARAMS \
     const uint8_t *pc, \
     JSValue *sp, \
     JSFunctionBytecode *b, \
+    JSStackFrame *sf, \
     JSContext *ctx, \
     JSValue *var_buf, \
     JSValue *arg_buf, \
-    JSVarRef **var_refs, \
-    JSStackFrame *sf, \
-    int argc, \
-    JSValue *argv
+    JSVarRef **var_refs
 
 #if TAIL_DISPATCH
 
@@ -133,6 +131,8 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
             sf->caller_ctx = caller_ctx;
             sf->this_obj = this_obj;
             sf->new_target = new_target;
+            sf->argc = argc;
+            sf->argv = argv;
             p = JS_VALUE_GET_OBJ(sf->cur_func);
             b = p->u.func.function_bytecode;
             ctx = b->realm;
@@ -211,6 +211,8 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
     sf->caller_ctx = caller_ctx;
     sf->this_obj = this_obj;
     sf->new_target = new_target;
+    sf->argc = argc;
+    sf->argv = argv;
 
     goto restart;
 
@@ -340,13 +342,13 @@ restart:
                 int arg = *pc++;
                 switch(arg) {
                 case OP_SPECIAL_OBJECT_ARGUMENTS:
-                    *sp++ = js_build_arguments(ctx, argc, (JSValueConst *)argv);
+                    *sp++ = js_build_arguments(ctx, sf->argc, (JSValueConst *)sf->argv);
                     if (unlikely(JS_IsException(sp[-1])))
                         GOTO_LABEL(exception);
                     break;
                 case OP_SPECIAL_OBJECT_MAPPED_ARGUMENTS:
-                    *sp++ = js_build_mapped_arguments(ctx, argc, (JSValueConst *)argv,
-                                                      sf, min_int(argc, b->arg_count));
+                    *sp++ = js_build_mapped_arguments(ctx, sf->argc, (JSValueConst *)sf->argv,
+                                                      sf, min_int(sf->argc, b->arg_count));
                     if (unlikely(JS_IsException(sp[-1])))
                         GOTO_LABEL(exception);
                     break;
@@ -386,7 +388,7 @@ restart:
             {
                 int first = get_u16(pc);
                 pc += 2;
-                *sp++ = js_build_rest(ctx, first, argc, (JSValueConst *)argv);
+                *sp++ = js_build_rest(ctx, first, sf->argc, (JSValueConst *)sf->argv);
                 if (unlikely(JS_IsException(sp[-1])))
                     GOTO_LABEL(exception);
                 BREAK;
@@ -725,7 +727,7 @@ restart:
                 super = JS_GetPrototype(ctx, func_obj_);
                 if (JS_IsException(super))
                     GOTO_LABEL(exception);
-                ret = JS_CallConstructor2(ctx, super, sf->new_target, argc, (JSValueConst *)argv);
+                ret = JS_CallConstructor2(ctx, super, sf->new_target, sf->argc, (JSValueConst *)sf->argv);
                 JS_FreeValue(ctx, super);
                 if (JS_IsException(ret))
                     GOTO_LABEL(exception);

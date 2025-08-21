@@ -18,7 +18,7 @@
 #define MUSTTAIL
 #endif
 
-#define TAIL_DISPATCH 0
+#define TAIL_DISPATCH 1
 #define TAIL_CALL_ARGS(pc) pc, sp, b, ctx, var_buf, arg_buf, var_refs, sf, ret_val, caller_ctx, this_obj, new_target, argc, argv, flags, local_buf
 #define TAIL_CALL_PARAMS \
     const uint8_t *pc, \
@@ -43,25 +43,26 @@
 PRESERVE_NONE static JSValue jsci_label_exception(TAIL_CALL_PARAMS);
 PRESERVE_NONE static JSValue jsci_label_done(TAIL_CALL_PARAMS);
 PRESERVE_NONE static JSValue jsci_label_done_generator(TAIL_CALL_PARAMS);
-typedef PRESERVE_NONE JSValue(*JSHandler)(TAIL_CALL_PARAMS);
+typedef PRESERVE_NONE JSValue(* const JSHandler)(TAIL_CALL_PARAMS);
 
-#define DEF(id, size, n_pop, n_push, f) static PRESERVE_NONE JSValue jsci_##id(TAIL_CALL_PARAMS);
+#define DEF(id, size, n_pop, n_push, f) static PRESERVE_NONE JSValue jsci_OP_##id(TAIL_CALL_PARAMS);
 #if SHORT_OPCODES
 #define def(id, size, n_pop, n_push, f)
 #else
-#define def(id, size, n_pop, n_push, f) static PRESERVE_NONE JSValue jsci_##id(TAIL_CALL_PARAMS);
+#define def(id, size, n_pop, n_push, f) static PRESERVE_NONE JSValue jsci_OP_##id(TAIL_CALL_PARAMS);
 #endif
 #include "quickjs-opcode.h"
+static PRESERVE_NONE JSValue jsci_OP_invalid(TAIL_CALL_PARAMS);
 
-static const JSHandler const jsci_jump_table[256] = {
-#define DEF(id, size, n_pop, n_push, f) jsci_##id,
+static const JSHandler jsci_jump_table[256] = {
+#define DEF(id, size, n_pop, n_push, f) jsci_OP_##id,
 #if SHORT_OPCODES
 #define def(id, size, n_pop, n_push, f)
 #else
-#define def(id, size, n_pop, n_push, f) jsci_##id,
+#define def(id, size, n_pop, n_push, f) jsci_OP_##id,
 #endif
 #include "quickjs-opcode.h"
-        [ OP_COUNT ... 255 ] = &&jsci_OP_invalid
+        [ OP_COUNT ... 255 ] = jsci_OP_invalid
 };
 #endif
 
@@ -2827,6 +2828,7 @@ restart:
     GOTO_LABEL(exception);
 #endif
 
+/* End of handlers */
 /*****************************************************************************/
 
 #if TAIL_DISPATCH

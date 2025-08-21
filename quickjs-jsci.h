@@ -14,9 +14,8 @@
 
 // Not needed in interpreter loop: func_obj rt p sf_s, arg_allocated_size i local_buf stack_buf pval alloca_size
 // Cold vars from: sf
-// Maybe move to stack frame: caller_ctx new_target flags
 #define TAIL_DISPATCH 1
-#define TAIL_CALL_ARGS(pc) pc, sp, b, ctx, var_buf, arg_buf, var_refs, sf, this_obj, new_target, argc, argv, flags, local_buf
+#define TAIL_CALL_ARGS(pc) pc, sp, b, ctx, var_buf, arg_buf, var_refs, sf, argc, argv, flags, local_buf
 #define TAIL_CALL_PARAMS \
     const uint8_t *pc, \
     JSValue *sp, \
@@ -26,8 +25,6 @@
     JSValue *arg_buf, \
     JSVarRef **var_refs, \
     JSStackFrame *sf, \
-    JSValueConst this_obj, \
-    JSValueConst new_target, \
     int argc, \
     JSValue *argv, \
     int flags, \
@@ -136,6 +133,8 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
             /* the stack frame is already allocated */
             sf = &s->frame;
             sf->caller_ctx = caller_ctx;
+            sf->this_obj = this_obj;
+            sf->new_target = new_target;
             p = JS_VALUE_GET_OBJ(sf->cur_func);
             b = p->u.func.function_bytecode;
             ctx = b->realm;
@@ -212,6 +211,8 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
     ctx = b->realm; /* set the current realm */
 
     sf->caller_ctx = caller_ctx;
+    sf->this_obj = this_obj;
+    sf->new_target = new_target;
 
     goto restart;
 
@@ -305,19 +306,19 @@ restart:
             {
                 JSValue val;
                 if (!(b->js_mode & JS_MODE_STRICT)) {
-                    uint32_t tag = JS_VALUE_GET_TAG(this_obj);
+                    uint32_t tag = JS_VALUE_GET_TAG(sf->this_obj);
                     if (likely(tag == JS_TAG_OBJECT))
                         goto normal_this;
                     if (tag == JS_TAG_NULL || tag == JS_TAG_UNDEFINED) {
                         val = JS_DupValue(ctx, ctx->global_obj);
                     } else {
-                        val = JS_ToObject(ctx, this_obj);
+                        val = JS_ToObject(ctx, sf->this_obj);
                         if (JS_IsException(val))
                             GOTO_LABEL(exception);
                     }
                 } else {
                 normal_this:
-                    val = JS_DupValue(ctx, this_obj);
+                    val = JS_DupValue(ctx, sf->this_obj);
                 }
                 *sp++ = val;
                 BREAK;
@@ -355,7 +356,7 @@ restart:
                     *sp++ = JS_DupValue(ctx, sf->cur_func);
                     break;
                 case OP_SPECIAL_OBJECT_NEW_TARGET:
-                    *sp++ = JS_DupValue(ctx, new_target);
+                    *sp++ = JS_DupValue(ctx, sf->new_target);
                     break;
                 case OP_SPECIAL_OBJECT_HOME_OBJECT:
                     {
@@ -708,7 +709,7 @@ restart:
             BREAK;
         }
         CASE(OP_check_ctor) {
-            if (JS_IsUndefined(new_target)) {
+            if (JS_IsUndefined(sf->new_target)) {
                 JS_ThrowTypeError(ctx, "class constructors must be invoked with 'new'");
                 GOTO_LABEL(exception);
             }
@@ -718,7 +719,7 @@ restart:
             {
                 JSValue super, ret;
                 sf->cur_pc = pc;
-                if (JS_IsUndefined(new_target)) {
+                if (JS_IsUndefined(sf->new_target)) {
                     JS_ThrowTypeError(ctx, "class constructors must be invoked with 'new'");
                     GOTO_LABEL(exception);
                 }
@@ -726,7 +727,7 @@ restart:
                 super = JS_GetPrototype(ctx, func_obj_);
                 if (JS_IsException(super))
                     GOTO_LABEL(exception);
-                ret = JS_CallConstructor2(ctx, super, new_target, argc, (JSValueConst *)argv);
+                ret = JS_CallConstructor2(ctx, super, sf->new_target, argc, (JSValueConst *)argv);
                 JS_FreeValue(ctx, super);
                 if (JS_IsException(ret))
                     GOTO_LABEL(exception);

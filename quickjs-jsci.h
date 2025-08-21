@@ -2,8 +2,23 @@
 // First cold var: sf
 // Maybe move to stack frame: caller_ctx new_target flags
 //
-// Handle: ret_val, opcode
+// Handle: ret_val
 
+#if __has_attribute(preserve_none)
+#define PRESERVE_NONE __attribute__((preserve_none))
+#else
+#warning "preserve_none not supported"
+#define PRESERVE_NONE
+#endif
+
+#if __has_attribute(musttail)
+#define MUSTTAIL __attribute__((musttail))
+#else
+#warning "must_tail not supported"
+#define MUSTTAIL
+#endif
+
+#define TAIL_DISPATCH 0
 #define TAIL_CALL_ARGS pc, sp, b, ctx, var_buf, arg_buf, var_refs, sf, caller_ctx, this_obj, new_target, argc, argv, flags
 #define TAIL_CALL_PARAMS \
     const uint8_t *pc, \
@@ -21,7 +36,6 @@
     JSValue *argv, \
     int flags
 
-
 /* argv[] is modified if (flags & JS_CALL_FLAG_COPY_ARGV) = 0. */
 static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                                JSValueConst this_obj, JSValueConst new_target,
@@ -38,7 +52,15 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
     JSVarRef **var_refs;
     size_t alloca_size;
 
-#if !DIRECT_DISPATCH
+#if TAIL_DISPATCH
+#define HANDLER(op)     case op:
+#define HANDLER_FALLTHROUGH(op, op2)  case op:
+#define BREAK           break
+#define GOTO_EXCEPTION  goto exception
+#define GOTO_DONE       goto done
+#define GOTO_DONE_GENERATOR  goto done_generator
+
+#elif !DIRECT_DISPATCH
 #define SWITCH(pc)      switch (*pc++)
 #define HANDLER(op)     case op:
 #define HANDLER_FALLTHROUGH(op, op2)  case op:
@@ -207,9 +229,12 @@ done_generator:
 
 /*****************************************************************************/
 
+#if !TAIL_DISPATCH
 restart:
     for(;;) {
         SWITCH(pc) {
+#endif
+
         HANDLER(OP_push_i32) {
             *sp++ = JS_NewInt32(ctx, get_u32(pc));
             pc += 4;
@@ -2808,6 +2833,8 @@ restart:
             BREAK;
         }
 #endif
+
+#if !TAIL_DISPATCH
         HANDLER(OP_invalid)
         DEFAULT:
           {
@@ -2819,6 +2846,7 @@ restart:
         }  /* SWITCH(pc) */
     }  /* for(;;) */
     GOTO_EXCEPTION;
+#endif
 }
 
 #undef HANDLER

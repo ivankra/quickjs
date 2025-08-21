@@ -19,7 +19,7 @@
 #endif
 
 #define TAIL_DISPATCH 0
-#define TAIL_CALL_ARGS(pc) pc, sp, b, ctx, var_buf, arg_buf, var_refs, sf, ret_val, caller_ctx, this_obj, new_target, argc, argv, flags
+#define TAIL_CALL_ARGS(pc) pc, sp, b, ctx, var_buf, arg_buf, var_refs, sf, ret_val, caller_ctx, this_obj, new_target, argc, argv, flags, local_buf
 #define TAIL_CALL_PARAMS \
     const uint8_t *pc, \
     JSValue *sp, \
@@ -35,7 +35,8 @@
     JSValueConst new_target, \
     int argc, \
     JSValue *argv, \
-    int flags
+    int flags, \
+    JSValue* local_buf
 
 #if TAIL_DISPATCH
 #define END_BRACE }
@@ -975,12 +976,12 @@ restart:
         HANDLER(OP_define_func)
             {
                 JSAtom atom;
-                int flags;
+                int pc_flags;
                 atom = get_u32(pc);
-                flags = pc[4];
+                pc_flags = pc[4];
                 pc += 5;
                 sf->cur_pc = pc;
-                if (JS_DefineGlobalFunction(ctx, atom, sp[-1], flags))
+                if (JS_DefineGlobalFunction(ctx, atom, sp[-1], pc_flags))
                     GOTO_LABEL(exception);
                 JS_FreeValue(ctx, sp[-1]);
                 sp--;
@@ -1519,17 +1520,17 @@ restart:
             {
                 JSValue method, ret;
                 BOOL ret_flag;
-                int flags;
-                flags = *pc++;
+                int pc_flags;
+                pc_flags = *pc++;
                 sf->cur_pc = pc;
-                method = JS_GetProperty(ctx, sp[-4], (flags & 1) ?
+                method = JS_GetProperty(ctx, sp[-4], (pc_flags & 1) ?
                                         JS_ATOM_throw : JS_ATOM_return);
                 if (JS_IsException(method))
                     GOTO_LABEL(exception);
                 if (JS_IsUndefined(method) || JS_IsNull(method)) {
                     ret_flag = TRUE;
                 } else {
-                    if (flags & 2) {
+                    if (pc_flags & 2) {
                         /* no argument */
                         ret = JS_CallFree(ctx, method, sp[-4],
                                           0, NULL);
@@ -2814,7 +2815,6 @@ restart:
 LABEL_HANDLER(exception) {
     JSRuntime *rt = caller_ctx->rt;
     JSValue *stack_buf = sf->var_buf + b->var_count;
-    JSValue *pval;
 #else
 exception:
 #endif

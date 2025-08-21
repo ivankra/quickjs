@@ -41,11 +41,12 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
 #if !DIRECT_DISPATCH
 #define SWITCH(pc)      switch (*pc++)
 #define HANDLER(op)     case op:
+#define HANDLER_FALLTHROUGH(op, op2)  case op:
 #define DEFAULT         default
 #define BREAK           break
 #define GOTO_EXCEPTION  goto exception
 #define GOTO_DONE       goto done
-#define GOTO_DONE_GENERATOR goto done_generator
+#define GOTO_DONE_GENERATOR  goto done_generator
 #else
     static const void * const dispatch_table[256] = {
 #define DEF(id, size, n_pop, n_push, f) && case_OP_ ## id,
@@ -58,7 +59,8 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
         [ OP_COUNT ... 255 ] = &&case_default
     };
 #define SWITCH(pc)      goto *dispatch_table[*pc++];
-#define HANDLER(op)        case_ ## op:
+#define HANDLER(op)     case_ ## op:
+#define HANDLER_FALLTHROUGH(op, op2)  case_ ## op:
 #define DEFAULT         case_default
 #define BREAK           SWITCH(pc)
 #define GOTO_EXCEPTION  goto exception
@@ -527,9 +529,9 @@ restart:
                 BREAK;
             }
 #if SHORT_OPCODES
-        HANDLER(OP_call0)
-        HANDLER(OP_call1)
-        HANDLER(OP_call2)
+        HANDLER_FALLTHROUGH(OP_call0, OP_call3)
+        HANDLER_FALLTHROUGH(OP_call1, OP_call3)
+        HANDLER_FALLTHROUGH(OP_call2, OP_call3)
         HANDLER(OP_call3)
           {
             int opcode_ = pc[-1];
@@ -613,7 +615,6 @@ restart:
             }
         HANDLER(OP_tail_call_method)
             {
-                int i;
                 int call_argc = get_u16(pc);
                 JSValue *call_argv = sp - call_argc;
                 pc += 2;
@@ -913,16 +914,28 @@ restart:
             }
 
         HANDLER(OP_put_var)
-        HANDLER(OP_put_var_init)
             {
-                int opcode_ = pc[-1];
                 int ret;
                 JSAtom atom;
                 atom = get_u32(pc);
                 pc += 4;
                 sf->cur_pc = pc;
 
-                ret = JS_SetGlobalVar(ctx, atom, sp[-1], opcode_ - OP_put_var);
+                ret = JS_SetGlobalVar(ctx, atom, sp[-1], 0);
+                sp--;
+                if (unlikely(ret < 0))
+                    GOTO_EXCEPTION;
+                BREAK;
+            }
+        HANDLER(OP_put_var_init)
+            {
+                int ret;
+                JSAtom atom;
+                atom = get_u32(pc);
+                pc += 4;
+                sf->cur_pc = pc;
+
+                ret = JS_SetGlobalVar(ctx, atom, sp[-1], 1);
                 sp--;
                 if (unlikely(ret < 0))
                     GOTO_EXCEPTION;
@@ -1221,8 +1234,8 @@ restart:
                 BREAK;
             }
 
-        HANDLER(OP_make_loc_ref)
-        HANDLER(OP_make_arg_ref)
+        HANDLER_FALLTHROUGH(OP_make_loc_ref, OP_make_var_ref_ref)
+        HANDLER_FALLTHROUGH(OP_make_arg_ref, OP_make_var_ref_ref)
         HANDLER(OP_make_var_ref_ref)
             {
                 int opcode_ = pc[-1];
@@ -1715,7 +1728,7 @@ restart:
             js_method_set_home_object(ctx, sp[-1], sp[-2]);
             BREAK;
         }
-        HANDLER(OP_define_method)
+        HANDLER_FALLTHROUGH(OP_define_method, OP_define_method_computed)
         HANDLER(OP_define_method_computed)
             {
                 int opcode_ = pc[-1];
@@ -1776,7 +1789,7 @@ restart:
                 BREAK;
             }
 
-        HANDLER(OP_define_class)
+        HANDLER_FALLTHROUGH(OP_define_class, OP_define_class_computed)
         HANDLER(OP_define_class_computed)
             {
                 int opcode_ = pc[-1];
@@ -2615,10 +2628,10 @@ restart:
             }
             BREAK;
 #endif
-        HANDLER(OP_with_get_var)
-        HANDLER(OP_with_put_var)
-        HANDLER(OP_with_delete_var)
-        HANDLER(OP_with_make_ref)
+        HANDLER_FALLTHROUGH(OP_with_get_var, OP_with_get_ref)
+        HANDLER_FALLTHROUGH(OP_with_put_var, OP_with_get_ref)
+        HANDLER_FALLTHROUGH(OP_with_delete_var, OP_with_get_ref)
+        HANDLER_FALLTHROUGH(OP_with_make_ref, OP_with_get_ref)
         HANDLER(OP_with_get_ref)
             {
                 int opcode_ = pc[-1];

@@ -1,3 +1,15 @@
+// p = JS_VALUE_GET_OBJ(func_obj);
+// p = JS_VALUE_GET_OBJ(sf->cur_func);  from async_func_resume
+//
+// b = p->u.func.function_bytecode;
+//
+// init/end: p alloca_size
+//
+//
+
+#define TAIL_CALL_PARAMS const uint8_t *pc, JSValue *sp, JSFunctionBytecode *b
+#define TAIL_CALL_ARGS pc, sp, b
+
 /* argv[] is modified if (flags & JS_CALL_FLAG_COPY_ARGV) = 0. */
 static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                                JSValueConst this_obj, JSValueConst new_target,
@@ -118,6 +130,59 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
     sf->prev_frame = rt->current_stack_frame;
     rt->current_stack_frame = sf;
     ctx = b->realm; /* set the current realm */
+    goto restart;
+
+ exception:
+    if (is_backtrace_needed(ctx, rt->current_exception)) {
+        /* add the backtrace information now (it is not done
+           before if the exception happens in a bytecode
+           operation */
+        sf->cur_pc = pc;
+        build_backtrace(ctx, rt->current_exception, NULL, 0, 0, 0);
+    }
+    if (!rt->current_exception_is_uncatchable) {
+        while (sp > stack_buf) {
+            JSValue val = *--sp;
+            JS_FreeValue(ctx, val);
+            if (JS_VALUE_GET_TAG(val) == JS_TAG_CATCH_OFFSET) {
+                int pos = JS_VALUE_GET_INT(val);
+                if (pos == 0) {
+                    /* enumerator: close it with a throw */
+                    JS_FreeValue(ctx, sp[-1]); /* drop the next method */
+                    sp--;
+                    JS_IteratorClose(ctx, sp[-1], TRUE);
+                } else {
+                    *sp++ = rt->current_exception;
+                    rt->current_exception = JS_UNINITIALIZED;
+                    pc = b->byte_code_buf + pos;
+                    goto restart;
+                }
+            }
+        }
+    }
+    ret_val = JS_EXCEPTION;
+    /* the local variables are freed by the caller in the generator
+       case. Hence the label 'done' should never be reached in a
+       generator function. */
+    if (b->func_kind != JS_FUNC_NORMAL) {
+    done_generator:
+        sf->cur_pc = pc;
+        sf->cur_sp = sp;
+    } else {
+    done:
+        if (unlikely(!list_empty(&sf->var_ref_list))) {
+            /* variable references reference the stack: must close them */
+            close_var_refs(rt, sf);
+        }
+        /* free the local variables and stack */
+        for(pval = local_buf; pval < sp; pval++) {
+            JS_FreeValue(ctx, *pval);
+        }
+    }
+    rt->current_stack_frame = sf->prev_frame;
+    return ret_val;
+
+/*****************************************************************************/
 
  restart:
     for(;;) {
@@ -2595,53 +2660,5 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
             goto exception;
         }
     }
- exception:
-    if (is_backtrace_needed(ctx, rt->current_exception)) {
-        /* add the backtrace information now (it is not done
-           before if the exception happens in a bytecode
-           operation */
-        sf->cur_pc = pc;
-        build_backtrace(ctx, rt->current_exception, NULL, 0, 0, 0);
-    }
-    if (!rt->current_exception_is_uncatchable) {
-        while (sp > stack_buf) {
-            JSValue val = *--sp;
-            JS_FreeValue(ctx, val);
-            if (JS_VALUE_GET_TAG(val) == JS_TAG_CATCH_OFFSET) {
-                int pos = JS_VALUE_GET_INT(val);
-                if (pos == 0) {
-                    /* enumerator: close it with a throw */
-                    JS_FreeValue(ctx, sp[-1]); /* drop the next method */
-                    sp--;
-                    JS_IteratorClose(ctx, sp[-1], TRUE);
-                } else {
-                    *sp++ = rt->current_exception;
-                    rt->current_exception = JS_UNINITIALIZED;
-                    pc = b->byte_code_buf + pos;
-                    goto restart;
-                }
-            }
-        }
-    }
-    ret_val = JS_EXCEPTION;
-    /* the local variables are freed by the caller in the generator
-       case. Hence the label 'done' should never be reached in a
-       generator function. */
-    if (b->func_kind != JS_FUNC_NORMAL) {
-    done_generator:
-        sf->cur_pc = pc;
-        sf->cur_sp = sp;
-    } else {
-    done:
-        if (unlikely(!list_empty(&sf->var_ref_list))) {
-            /* variable references reference the stack: must close them */
-            close_var_refs(rt, sf);
-        }
-        /* free the local variables and stack */
-        for(pval = local_buf; pval < sp; pval++) {
-            JS_FreeValue(ctx, *pval);
-        }
-    }
-    rt->current_stack_frame = sf->prev_frame;
-    return ret_val;
+    goto exception;
 }

@@ -334,6 +334,7 @@ typedef struct JSStackFrame {
     JSValue *cur_sp;
 
     // Temps used only during interpreter loop
+    struct JSVarRef **var_refs;
     JSContext *caller_ctx;
     int argc;  // merge with arg_count?
     JSValue *argv;  // merge with arg_buf?

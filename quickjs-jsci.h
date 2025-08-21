@@ -15,7 +15,7 @@
 // Not needed in interpreter loop: func_obj rt p sf_s, arg_allocated_size i local_buf stack_buf pval alloca_size
 // Cold vars from: sf
 #define TAIL_DISPATCH 1
-#define TAIL_CALL_ARGS(pc) pc, sp, b, sf, ctx, var_buf, arg_buf, var_refs
+#define TAIL_CALL_ARGS(pc) pc, sp, b, sf, ctx, var_buf, arg_buf
 #define TAIL_CALL_PARAMS \
     const uint8_t *pc, \
     JSValue *sp, \
@@ -23,8 +23,7 @@
     JSStackFrame *sf, \
     JSContext *ctx, \
     JSValue *var_buf, \
-    JSValue *arg_buf, \
-    JSVarRef **var_refs
+    JSValue *arg_buf \
 
 #if TAIL_DISPATCH
 
@@ -138,6 +137,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
             ctx = b->realm;
             var_refs = p->u.func.var_refs;
             sf->local_buf = arg_buf = sf->arg_buf;
+            sf->var_refs = var_refs;
             var_buf = sf->var_buf;
             stack_buf = sf->var_buf + b->var_count;
             sp = sf->cur_sp;
@@ -183,6 +183,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
     sf->cur_func = (JSValue)func_obj;
     init_list_head(&sf->var_ref_list);
     var_refs = p->u.func.var_refs;
+    sf->var_refs = var_refs;
 
     sf->local_buf = alloca(alloca_size);
     if (unlikely(arg_allocated_size)) {
@@ -268,7 +269,7 @@ restart:
             BREAK;
         }
         CASE(OP_fclosure8) {
-            *sp++ = js_closure(ctx, JS_DupValue(ctx, b->cpool[*pc++]), var_refs, sf);
+            *sp++ = js_closure(ctx, JS_DupValue(ctx, b->cpool[*pc++]), sf->var_refs, sf);
             if (unlikely(JS_IsException(sp[-1])))
                 GOTO_LABEL(exception);
             BREAK;
@@ -541,7 +542,7 @@ restart:
             {
                 JSValue bfunc = JS_DupValue(ctx, b->cpool[get_u32(pc)]);
                 pc += 4;
-                *sp++ = js_closure(ctx, bfunc, var_refs, sf);
+                *sp++ = js_closure(ctx, bfunc, sf->var_refs, sf);
                 if (unlikely(JS_IsException(sp[-1])))
                     GOTO_LABEL(exception);
                 BREAK;
@@ -1101,18 +1102,18 @@ restart:
         CASE(OP_set_arg1) { set_value(ctx, &arg_buf[1], JS_DupValue(ctx, sp[-1])); BREAK; }
         CASE(OP_set_arg2) { set_value(ctx, &arg_buf[2], JS_DupValue(ctx, sp[-1])); BREAK; }
         CASE(OP_set_arg3) { set_value(ctx, &arg_buf[3], JS_DupValue(ctx, sp[-1])); BREAK; }
-        CASE(OP_get_var_ref0) { *sp++ = JS_DupValue(ctx, *var_refs[0]->pvalue); BREAK; }
-        CASE(OP_get_var_ref1) { *sp++ = JS_DupValue(ctx, *var_refs[1]->pvalue); BREAK; }
-        CASE(OP_get_var_ref2) { *sp++ = JS_DupValue(ctx, *var_refs[2]->pvalue); BREAK; }
-        CASE(OP_get_var_ref3) { *sp++ = JS_DupValue(ctx, *var_refs[3]->pvalue); BREAK; }
-        CASE(OP_put_var_ref0) { set_value(ctx, var_refs[0]->pvalue, *--sp); BREAK; }
-        CASE(OP_put_var_ref1) { set_value(ctx, var_refs[1]->pvalue, *--sp); BREAK; }
-        CASE(OP_put_var_ref2) { set_value(ctx, var_refs[2]->pvalue, *--sp); BREAK; }
-        CASE(OP_put_var_ref3) { set_value(ctx, var_refs[3]->pvalue, *--sp); BREAK; }
-        CASE(OP_set_var_ref0) { set_value(ctx, var_refs[0]->pvalue, JS_DupValue(ctx, sp[-1])); BREAK; }
-        CASE(OP_set_var_ref1) { set_value(ctx, var_refs[1]->pvalue, JS_DupValue(ctx, sp[-1])); BREAK; }
-        CASE(OP_set_var_ref2) { set_value(ctx, var_refs[2]->pvalue, JS_DupValue(ctx, sp[-1])); BREAK; }
-        CASE(OP_set_var_ref3) { set_value(ctx, var_refs[3]->pvalue, JS_DupValue(ctx, sp[-1])); BREAK; }
+        CASE(OP_get_var_ref0) { *sp++ = JS_DupValue(ctx, *sf->var_refs[0]->pvalue); BREAK; }
+        CASE(OP_get_var_ref1) { *sp++ = JS_DupValue(ctx, *sf->var_refs[1]->pvalue); BREAK; }
+        CASE(OP_get_var_ref2) { *sp++ = JS_DupValue(ctx, *sf->var_refs[2]->pvalue); BREAK; }
+        CASE(OP_get_var_ref3) { *sp++ = JS_DupValue(ctx, *sf->var_refs[3]->pvalue); BREAK; }
+        CASE(OP_put_var_ref0) { set_value(ctx, sf->var_refs[0]->pvalue, *--sp); BREAK; }
+        CASE(OP_put_var_ref1) { set_value(ctx, sf->var_refs[1]->pvalue, *--sp); BREAK; }
+        CASE(OP_put_var_ref2) { set_value(ctx, sf->var_refs[2]->pvalue, *--sp); BREAK; }
+        CASE(OP_put_var_ref3) { set_value(ctx, sf->var_refs[3]->pvalue, *--sp); BREAK; }
+        CASE(OP_set_var_ref0) { set_value(ctx, sf->var_refs[0]->pvalue, JS_DupValue(ctx, sp[-1])); BREAK; }
+        CASE(OP_set_var_ref1) { set_value(ctx, sf->var_refs[1]->pvalue, JS_DupValue(ctx, sp[-1])); BREAK; }
+        CASE(OP_set_var_ref2) { set_value(ctx, sf->var_refs[2]->pvalue, JS_DupValue(ctx, sp[-1])); BREAK; }
+        CASE(OP_set_var_ref3) { set_value(ctx, sf->var_refs[3]->pvalue, JS_DupValue(ctx, sp[-1])); BREAK; }
 #endif
 
         CASE(OP_get_var_ref)
@@ -1121,7 +1122,7 @@ restart:
                 JSValue val;
                 idx = get_u16(pc);
                 pc += 2;
-                val = *var_refs[idx]->pvalue;
+                val = *sf->var_refs[idx]->pvalue;
                 sp[0] = JS_DupValue(ctx, val);
                 sp++;
                 BREAK;
@@ -1131,7 +1132,7 @@ restart:
                 int idx;
                 idx = get_u16(pc);
                 pc += 2;
-                set_value(ctx, var_refs[idx]->pvalue, sp[-1]);
+                set_value(ctx, sf->var_refs[idx]->pvalue, sp[-1]);
                 sp--;
                 BREAK;
             }
@@ -1140,7 +1141,7 @@ restart:
                 int idx;
                 idx = get_u16(pc);
                 pc += 2;
-                set_value(ctx, var_refs[idx]->pvalue, JS_DupValue(ctx, sp[-1]));
+                set_value(ctx, sf->var_refs[idx]->pvalue, JS_DupValue(ctx, sp[-1]));
                 BREAK;
             }
         CASE(OP_get_var_ref_check)
@@ -1149,7 +1150,7 @@ restart:
                 JSValue val;
                 idx = get_u16(pc);
                 pc += 2;
-                val = *var_refs[idx]->pvalue;
+                val = *sf->var_refs[idx]->pvalue;
                 if (unlikely(JS_IsUninitialized(val))) {
                     JS_ThrowReferenceErrorUninitialized2(ctx, b, idx, TRUE);
                     GOTO_LABEL(exception);
@@ -1163,11 +1164,11 @@ restart:
                 int idx;
                 idx = get_u16(pc);
                 pc += 2;
-                if (unlikely(JS_IsUninitialized(*var_refs[idx]->pvalue))) {
+                if (unlikely(JS_IsUninitialized(*sf->var_refs[idx]->pvalue))) {
                     JS_ThrowReferenceErrorUninitialized2(ctx, b, idx, TRUE);
                     GOTO_LABEL(exception);
                 }
-                set_value(ctx, var_refs[idx]->pvalue, sp[-1]);
+                set_value(ctx, sf->var_refs[idx]->pvalue, sp[-1]);
                 sp--;
                 BREAK;
             }
@@ -1176,11 +1177,11 @@ restart:
                 int idx;
                 idx = get_u16(pc);
                 pc += 2;
-                if (unlikely(!JS_IsUninitialized(*var_refs[idx]->pvalue))) {
+                if (unlikely(!JS_IsUninitialized(*sf->var_refs[idx]->pvalue))) {
                     JS_ThrowReferenceErrorUninitialized2(ctx, b, idx, TRUE);
                     GOTO_LABEL(exception);
                 }
-                set_value(ctx, var_refs[idx]->pvalue, sp[-1]);
+                set_value(ctx, sf->var_refs[idx]->pvalue, sp[-1]);
                 sp--;
                 BREAK;
             }
@@ -1269,7 +1270,7 @@ restart:
                 if (unlikely(JS_IsException(sp[-1])))
                     GOTO_LABEL(exception);
                 if (opcode_ == OP_make_var_ref_ref) {
-                    var_ref = var_refs[idx];
+                    var_ref = sf->var_refs[idx];
                     var_ref->header.ref_count++;
                 } else {
                     var_ref = get_var_ref(ctx, sf, idx, opcode_ == OP_make_arg_ref);
@@ -1819,7 +1820,7 @@ restart:
                 class_flags = pc[4];
                 pc += 5;
                 if (js_op_define_class(ctx, sp, atom, class_flags,
-                                       var_refs, sf,
+                                       sf->var_refs, sf,
                                        (opcode_ == OP_define_class_computed)) < 0)
                     GOTO_LABEL(exception);
                 BREAK;

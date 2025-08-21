@@ -663,7 +663,6 @@ restart:
             BREAK;
         CASE(OP_check_ctor):
             if (JS_IsUndefined(new_target)) {
-            non_ctor_call:
                 JS_ThrowTypeError(ctx, "class constructors must be invoked with 'new'");
                 GOTO_EXCEPTION;
             }
@@ -672,8 +671,10 @@ restart:
             {
                 JSValue super, ret;
                 sf->cur_pc = pc;
-                if (JS_IsUndefined(new_target))
-                    goto non_ctor_call;
+                if (JS_IsUndefined(new_target)) {
+                    JS_ThrowTypeError(ctx, "class constructors must be invoked with 'new'");
+                    GOTO_EXCEPTION;
+                }
                 JSValue func_obj_ = sf->cur_func;
                 super = JS_GetPrototype(ctx, func_obj_);
                 if (JS_IsException(super))
@@ -2676,47 +2677,50 @@ restart:
         CASE(OP_is_undefined_or_null):
             if (JS_VALUE_GET_TAG(sp[-1]) == JS_TAG_UNDEFINED ||
                 JS_VALUE_GET_TAG(sp[-1]) == JS_TAG_NULL) {
-                goto set_true;
+                sp[-1] = JS_TRUE;
             } else {
-                goto free_and_set_false;
+                JS_FreeValue(ctx, sp[-1]);
+                sp[-1] = JS_FALSE;
             }
+            BREAK;
 #if SHORT_OPCODES
         CASE(OP_is_undefined):
             if (JS_VALUE_GET_TAG(sp[-1]) == JS_TAG_UNDEFINED) {
-                goto set_true;
+                sp[-1] = JS_TRUE;
             } else {
-                goto free_and_set_false;
+                JS_FreeValue(ctx, sp[-1]);
+                sp[-1] = JS_FALSE;
             }
+            BREAK;
         CASE(OP_is_null):
             if (JS_VALUE_GET_TAG(sp[-1]) == JS_TAG_NULL) {
-                goto set_true;
+                sp[-1] = JS_TRUE;
             } else {
-                goto free_and_set_false;
+                JS_FreeValue(ctx, sp[-1]);
+                sp[-1] = JS_FALSE;
             }
             /* XXX: could merge to a single opcode */
+            BREAK;
         CASE(OP_typeof_is_undefined):
             /* different from OP_is_undefined because of isHTMLDDA */
             if (js_operator_typeof(ctx, sp[-1]) == JS_ATOM_undefined) {
-                goto free_and_set_true;
+                JS_FreeValue(ctx, sp[-1]);
+                sp[-1] = JS_TRUE;
             } else {
-                goto free_and_set_false;
+                JS_FreeValue(ctx, sp[-1]);
+                sp[-1] = JS_FALSE;
             }
+            BREAK;
         CASE(OP_typeof_is_function):
             if (js_operator_typeof(ctx, sp[-1]) == JS_ATOM_function) {
-                goto free_and_set_true;
+                JS_FreeValue(ctx, sp[-1]);
+                sp[-1] = JS_TRUE;
             } else {
-                goto free_and_set_false;
+                JS_FreeValue(ctx, sp[-1]);
+                sp[-1] = JS_FALSE;
             }
-        free_and_set_true:
-            JS_FreeValue(ctx, sp[-1]);
+            BREAK;
 #endif
-        set_true:
-            sp[-1] = JS_TRUE;
-            BREAK;
-        free_and_set_false:
-            JS_FreeValue(ctx, sp[-1]);
-            sp[-1] = JS_FALSE;
-            BREAK;
         CASE(OP_invalid):
         DEFAULT:
           {

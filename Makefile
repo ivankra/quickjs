@@ -96,8 +96,8 @@ else
 endif
 
 ifdef CONFIG_CLANG
-  HOST_CC=clang
-  CC=$(CROSS_PREFIX)clang
+  HOST_CC=clang-19
+  CC=$(CROSS_PREFIX)clang-19
   CFLAGS+=-g -Wall -MMD -MF $(OBJDIR)/$(@F).d
   CFLAGS += -Wextra
   CFLAGS += -Wno-sign-compare

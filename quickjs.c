@@ -338,6 +338,7 @@ typedef struct JSStackFrame {
     int argc;
     JSValue *argv;
     JSContext *caller_ctx;
+    JSValueConst new_target;
     JSValue *local_buf;
     /* only used in generators. Current stack pointer value. NULL if
        the function is running. */
@@ -17429,6 +17430,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
     }
 
     sf->cur_func = (JSValue)func_obj;
+    sf->new_target = new_target;
 
     b = p->u.func.function_bytecode;
     var_refs = p->u.func.var_refs;
@@ -17602,7 +17604,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                     *sp++ = JS_DupValue(ctx, sf->cur_func);
                     break;
                 case OP_SPECIAL_OBJECT_NEW_TARGET:
-                    *sp++ = JS_DupValue(ctx, new_target);
+                    *sp++ = JS_DupValue(ctx, sf->new_target);
                     break;
                 case OP_SPECIAL_OBJECT_HOME_OBJECT:
                     {
@@ -17930,7 +17932,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
             BREAK;
         }
         CASE(OP_check_ctor) {
-            if (JS_IsUndefined(new_target)) {
+            if (JS_IsUndefined(sf->new_target)) {
                 JS_ThrowTypeError(ctx, "class constructors must be invoked with 'new'");
                 GOTO(exception);
             }
@@ -17940,14 +17942,14 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
             {
                 JSValue super, ret;
                 sf->cur_pc = pc;
-                if (JS_IsUndefined(new_target)) {
+                if (JS_IsUndefined(sf->new_target)) {
                     JS_ThrowTypeError(ctx, "class constructors must be invoked with 'new'");
                     GOTO(exception);
                 }
                 super = JS_GetPrototype(ctx, sf->cur_func);
                 if (JS_IsException(super))
                     GOTO(exception);
-                ret = JS_CallConstructor2(ctx, super, new_target, sf->argc, (JSValueConst *)sf->argv);
+                ret = JS_CallConstructor2(ctx, super, sf->new_target, sf->argc, (JSValueConst *)sf->argv);
                 JS_FreeValue(ctx, super);
                 if (JS_IsException(ret))
                     GOTO(exception);

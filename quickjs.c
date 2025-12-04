@@ -17363,6 +17363,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
 #define CASE_FALLTHROUGH(op, target)  case op:
 #define DEFAULT         default:
 #define BREAK           break
+#define GOTO(label)     goto label
 #else
     static const void * const dispatch_table[256] = {
 #define DEF(id, size, n_pop, n_push, f) && case_OP_ ## id,
@@ -17379,6 +17380,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
 #define CASE_FALLTHROUGH(op, target)  case_ ## op:
 #define DEFAULT         case_default:
 #define BREAK           SWITCH(pc)
+#define GOTO(label)     goto label
 #endif
 
     if (js_poll_interrupts(caller_ctx))
@@ -17518,7 +17520,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
         CASE(OP_fclosure8) {
             *sp++ = js_closure(ctx, JS_DupValue(ctx, b->cpool[*pc++]), var_refs, sf, FALSE);
             if (unlikely(JS_IsException(sp[-1])))
-                goto exception;
+                GOTO(exception);
             BREAK;
         }
         CASE(OP_push_empty_string) {
@@ -17552,7 +17554,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                     } else {
                         val = JS_ToObject(ctx, this_obj);
                         if (JS_IsException(val))
-                            goto exception;
+                            GOTO(exception);
                     }
                 } else {
                 normal_this:
@@ -17572,7 +17574,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
         CASE(OP_object) {
             *sp++ = JS_NewObject(ctx);
             if (unlikely(JS_IsException(sp[-1])))
-                goto exception;
+                GOTO(exception);
             BREAK;
         }
         CASE(OP_special_object)
@@ -17582,13 +17584,13 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 case OP_SPECIAL_OBJECT_ARGUMENTS:
                     *sp++ = js_build_arguments(ctx, argc, (JSValueConst *)argv);
                     if (unlikely(JS_IsException(sp[-1])))
-                        goto exception;
+                        GOTO(exception);
                     break;
                 case OP_SPECIAL_OBJECT_MAPPED_ARGUMENTS:
                     *sp++ = js_build_mapped_arguments(ctx, argc, (JSValueConst *)argv,
                                                       sf, min_int(argc, b->arg_count));
                     if (unlikely(JS_IsException(sp[-1])))
-                        goto exception;
+                        GOTO(exception);
                     break;
                 case OP_SPECIAL_OBJECT_THIS_FUNC:
                     *sp++ = JS_DupValue(ctx, sf->cur_func);
@@ -17609,12 +17611,12 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 case OP_SPECIAL_OBJECT_VAR_OBJECT:
                     *sp++ = JS_NewObjectProto(ctx, JS_NULL);
                     if (unlikely(JS_IsException(sp[-1])))
-                        goto exception;
+                        GOTO(exception);
                     break;
                 case OP_SPECIAL_OBJECT_IMPORT_META:
                     *sp++ = js_import_meta(ctx);
                     if (unlikely(JS_IsException(sp[-1])))
-                        goto exception;
+                        GOTO(exception);
                     break;
                 default:
                     abort();
@@ -17628,7 +17630,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 first = min_int(first, argc);
                 *sp++ = js_create_array(ctx, argc - first, (JSValueConst *)(argv + first));
                 if (unlikely(JS_IsException(sp[-1])))
-                    goto exception;
+                    GOTO(exception);
                 BREAK;
             }
 
@@ -17790,7 +17792,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 pc += 4;
                 *sp++ = js_closure(ctx, bfunc, var_refs, sf, FALSE);
                 if (unlikely(JS_IsException(sp[-1])))
-                    goto exception;
+                    GOTO(exception);
                 BREAK;
             }
 #if SHORT_OPCODES
@@ -17799,7 +17801,18 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
         CASE_FALLTHROUGH(OP_call2, OP_call3)
         CASE(OP_call3) {
             call_argc = opcode - OP_call0;
-            goto has_call_argc;
+            /* goto has_call_argc; */
+            call_argv = sp - call_argc;
+            sf->cur_pc = pc;
+            ret_val = JS_CallInternal(ctx, call_argv[-1], JS_UNDEFINED,
+                                      JS_UNDEFINED, call_argc, call_argv, 0);
+            if (unlikely(JS_IsException(ret_val)))
+                GOTO(exception);
+            for(i = -1; i < call_argc; i++)
+                JS_FreeValue(ctx, call_argv[i]);
+            sp -= call_argc + 1;
+            *sp++ = ret_val;
+            BREAK;
         }
 #endif
         CASE_FALLTHROUGH(OP_call, OP_tail_call)
@@ -17814,9 +17827,9 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 ret_val = JS_CallInternal(ctx, call_argv[-1], JS_UNDEFINED,
                                           JS_UNDEFINED, call_argc, call_argv, 0);
                 if (unlikely(JS_IsException(ret_val)))
-                    goto exception;
+                    GOTO(exception);
                 if (opcode == OP_tail_call)
-                    goto done;
+                    GOTO(done);
                 for(i = -1; i < call_argc; i++)
                     JS_FreeValue(ctx, call_argv[i]);
                 sp -= call_argc + 1;
@@ -17833,7 +17846,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                                                      call_argv[-1],
                                                      call_argc, call_argv, 0);
                 if (unlikely(JS_IsException(ret_val)))
-                    goto exception;
+                    GOTO(exception);
                 for(i = -2; i < call_argc; i++)
                     JS_FreeValue(ctx, call_argv[i]);
                 sp -= call_argc + 2;
@@ -17850,9 +17863,9 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 ret_val = JS_CallInternal(ctx, call_argv[-1], call_argv[-2],
                                           JS_UNDEFINED, call_argc, call_argv, 0);
                 if (unlikely(JS_IsException(ret_val)))
-                    goto exception;
+                    GOTO(exception);
                 if (opcode == OP_tail_call_method)
-                    goto done;
+                    GOTO(done);
                 for(i = -2; i < call_argc; i++)
                     JS_FreeValue(ctx, call_argv[i]);
                 sp -= call_argc + 2;
@@ -17865,7 +17878,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
             ret_val = js_create_array_free(ctx, call_argc, sp - call_argc);
             sp -= call_argc;
             if (unlikely(JS_IsException(ret_val)))
-                goto exception;
+                GOTO(exception);
             *sp++ = ret_val;
             BREAK;
         }
@@ -17879,7 +17892,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
 
                 ret_val = js_function_apply(ctx, sp[-3], 2, (JSValueConst *)&sp[-2], magic);
                 if (unlikely(JS_IsException(ret_val)))
-                    goto exception;
+                    GOTO(exception);
                 JS_FreeValue(ctx, sp[-3]);
                 JS_FreeValue(ctx, sp[-2]);
                 JS_FreeValue(ctx, sp[-1]);
@@ -17889,11 +17902,11 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
             }
         CASE(OP_return) {
             ret_val = *--sp;
-            goto done;
+            GOTO(done);
         }
         CASE(OP_return_undef) {
             ret_val = JS_UNDEFINED;
-            goto done;
+            GOTO(done);
         }
 
         CASE(OP_check_ctor_return) {
@@ -17901,7 +17914,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
             if (!JS_IsObject(sp[-1])) {
                 if (!JS_IsUndefined(sp[-1])) {
                     JS_ThrowTypeError(caller_ctx, "derived class constructor must return an object or undefined");
-                    goto exception;
+                    GOTO(exception);
                 }
                 sp[0] = JS_TRUE;
             } else {
@@ -17912,9 +17925,8 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
         }
         CASE(OP_check_ctor) {
             if (JS_IsUndefined(new_target)) {
-            non_ctor_call:
                 JS_ThrowTypeError(ctx, "class constructors must be invoked with 'new'");
-                goto exception;
+                GOTO(exception);
             }
             BREAK;
         }
@@ -17922,15 +17934,17 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
             {
                 JSValue super, ret;
                 sf->cur_pc = pc;
-                if (JS_IsUndefined(new_target))
-                    goto non_ctor_call;
+                if (JS_IsUndefined(new_target)) {
+                    JS_ThrowTypeError(ctx, "class constructors must be invoked with 'new'");
+                    GOTO(exception);
+                }
                 super = JS_GetPrototype(ctx, func_obj);
                 if (JS_IsException(super))
-                    goto exception;
+                    GOTO(exception);
                 ret = JS_CallConstructor2(ctx, super, new_target, argc, (JSValueConst *)argv);
                 JS_FreeValue(ctx, super);
                 if (JS_IsException(ret))
-                    goto exception;
+                    GOTO(exception);
                 *sp++ = ret;
                 BREAK;
             }
@@ -17938,16 +17952,16 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
             {
                 int ret = JS_CheckBrand(ctx, sp[-2], sp[-1]);
                 if (ret < 0)
-                    goto exception;
+                    GOTO(exception);
                 if (!ret) {
                     JS_ThrowTypeError(ctx, "invalid brand on object");
-                    goto exception;
+                    GOTO(exception);
                 }
                 BREAK;
             }
         CASE(OP_add_brand) {
             if (JS_AddBrand(ctx, sp[-2], sp[-1]) < 0)
-                goto exception;
+                GOTO(exception);
             JS_FreeValue(ctx, sp[-2]);
             JS_FreeValue(ctx, sp[-1]);
             sp -= 2;
@@ -17956,7 +17970,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
 
         CASE(OP_throw) {
             JS_Throw(ctx, *--sp);
-            goto exception;
+            GOTO(exception);
         }
 
         CASE(OP_throw_error)
@@ -17987,7 +18001,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                     JS_ThrowTypeError(ctx, "iterator does not have a throw method");
                 else
                     JS_ThrowInternalError(ctx, "invalid throw var type %d", type);
-                goto exception;
+                GOTO(exception);
             }
 
         CASE(OP_eval)
@@ -18011,7 +18025,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                                               JS_UNDEFINED, call_argc, call_argv, 0);
                 }
                 if (unlikely(JS_IsException(ret_val)))
-                    goto exception;
+                    GOTO(exception);
                 for(i = -1; i < call_argc; i++)
                     JS_FreeValue(ctx, call_argv[i]);
                 sp -= call_argc + 1;
@@ -18031,7 +18045,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 sf->cur_pc = pc;
                 tab = build_arg_list(ctx, &len, sp[-1]);
                 if (!tab)
-                    goto exception;
+                    GOTO(exception);
                 if (js_same_value(ctx, sp[-2], ctx->eval_obj)) {
                     if (len >= 1)
                         obj = tab[0];
@@ -18045,7 +18059,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 }
                 free_arg_list(ctx, tab, len);
                 if (unlikely(JS_IsException(ret_val)))
-                    goto exception;
+                    GOTO(exception);
                 JS_FreeValue(ctx, sp[-2]);
                 JS_FreeValue(ctx, sp[-1]);
                 sp -= 2;
@@ -18058,7 +18072,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 sp[-2] = JS_NewRegexp(ctx, sp[-2], sp[-1]);
                 sp--;
                 if (JS_IsException(sp[-1]))
-                    goto exception;
+                    GOTO(exception);
                 BREAK;
             }
 
@@ -18068,7 +18082,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 sf->cur_pc = pc;
                 proto = JS_GetPrototype(ctx, sp[-1]);
                 if (JS_IsException(proto))
-                    goto exception;
+                    GOTO(exception);
                 JS_FreeValue(ctx, sp[-1]);
                 sp[-1] = proto;
                 BREAK;
@@ -18080,7 +18094,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 sf->cur_pc = pc;
                 val = js_dynamic_import(ctx, sp[-2], sp[-1]);
                 if (JS_IsException(val))
-                    goto exception;
+                    GOTO(exception);
                 JS_FreeValue(ctx, sp[-2]);
                 JS_FreeValue(ctx, sp[-1]);
                 sp--;
@@ -18100,7 +18114,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                     JSClosureVar *cv = &b->closure_var[idx];
                     if (cv->is_lexical) {
                         JS_ThrowReferenceErrorUninitialized(ctx, cv->var_name);
-                        goto exception;
+                        GOTO(exception);
                     } else {
                         sf->cur_pc = pc;
                         sp[0] = JS_GetPropertyInternal(ctx, ctx->global_obj,
@@ -18108,7 +18122,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                                                        ctx->global_obj,
                                                        opcode - OP_get_var_undef);
                         if (JS_IsException(sp[0]))
-                            goto exception;
+                            GOTO(exception);
                     }
                 } else {
                     sp[0] = JS_DupValue(ctx, val);
@@ -18135,21 +18149,21 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                             JS_ThrowReferenceErrorUninitialized(ctx, cv->var_name);
                         else
                             JS_ThrowTypeErrorReadOnly(ctx, JS_PROP_THROW, cv->var_name);
-                        goto exception;
+                        GOTO(exception);
                     } else {
                         sf->cur_pc = pc;
                         ret = JS_HasProperty(ctx, ctx->global_obj, cv->var_name);
                         if (ret < 0)
-                            goto exception;
+                            GOTO(exception);
                         if (ret == 0 && is_strict_mode(ctx)) {
                             JS_ThrowReferenceErrorNotDefined(ctx, cv->var_name);
-                            goto exception;
+                            GOTO(exception);
                         }
                         ret = JS_SetPropertyInternal(ctx, ctx->global_obj, cv->var_name, sp[-1],
                                                      ctx->global_obj, JS_PROP_THROW_STRICT);
                         sp--;
                         if (ret < 0)
-                            goto exception;
+                            GOTO(exception);
                     }
                 } else {
                 put_var_ok:
@@ -18291,7 +18305,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 val = *var_refs[idx]->pvalue;
                 if (unlikely(JS_IsUninitialized(val))) {
                     JS_ThrowReferenceErrorUninitialized2(ctx, b, idx, TRUE);
-                    goto exception;
+                    GOTO(exception);
                 }
                 sp[0] = JS_DupValue(ctx, val);
                 sp++;
@@ -18304,7 +18318,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 pc += 2;
                 if (unlikely(JS_IsUninitialized(*var_refs[idx]->pvalue))) {
                     JS_ThrowReferenceErrorUninitialized2(ctx, b, idx, TRUE);
-                    goto exception;
+                    GOTO(exception);
                 }
                 set_value(ctx, var_refs[idx]->pvalue, sp[-1]);
                 sp--;
@@ -18317,7 +18331,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 pc += 2;
                 if (unlikely(!JS_IsUninitialized(*var_refs[idx]->pvalue))) {
                     JS_ThrowReferenceErrorUninitialized2(ctx, b, idx, TRUE);
-                    goto exception;
+                    GOTO(exception);
                 }
                 set_value(ctx, var_refs[idx]->pvalue, sp[-1]);
                 sp--;
@@ -18338,7 +18352,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 pc += 2;
                 if (unlikely(JS_IsUninitialized(var_buf[idx]))) {
                     JS_ThrowReferenceErrorUninitialized2(ctx, b, idx, FALSE);
-                    goto exception;
+                    GOTO(exception);
                 }
                 sp[0] = JS_DupValue(ctx, var_buf[idx]);
                 sp++;
@@ -18351,7 +18365,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 pc += 2;
                 if (unlikely(JS_IsUninitialized(var_buf[idx]))) {
                     JS_ThrowReferenceErrorUninitialized2(caller_ctx, b, idx, FALSE);
-                    goto exception;
+                    GOTO(exception);
                 }
                 sp[0] = JS_DupValue(ctx, var_buf[idx]);
                 sp++;
@@ -18364,7 +18378,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 pc += 2;
                 if (unlikely(JS_IsUninitialized(var_buf[idx]))) {
                     JS_ThrowReferenceErrorUninitialized2(ctx, b, idx, FALSE);
-                    goto exception;
+                    GOTO(exception);
                 }
                 set_value(ctx, &var_buf[idx], sp[-1]);
                 sp--;
@@ -18377,7 +18391,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 pc += 2;
                 if (unlikely(!JS_IsUninitialized(var_buf[idx]))) {
                     JS_ThrowReferenceError(ctx, "'this' can be initialized only once");
-                    goto exception;
+                    GOTO(exception);
                 }
                 set_value(ctx, &var_buf[idx], sp[-1]);
                 sp--;
@@ -18405,20 +18419,20 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 pc += 6;
                 *sp++ = JS_NewObjectProto(ctx, JS_NULL);
                 if (unlikely(JS_IsException(sp[-1])))
-                    goto exception;
+                    GOTO(exception);
                 if (opcode == OP_make_var_ref_ref) {
                     var_ref = var_refs[idx];
                     var_ref->header.ref_count++;
                 } else {
                     var_ref = get_var_ref(ctx, sf, idx, opcode == OP_make_arg_ref);
                     if (!var_ref)
-                        goto exception;
+                        GOTO(exception);
                 }
                 pr = add_property(ctx, JS_VALUE_GET_OBJ(sp[-1]), atom,
                                   JS_PROP_WRITABLE | JS_PROP_VARREF);
                 if (!pr) {
                     free_var_ref(rt, var_ref);
-                    goto exception;
+                    GOTO(exception);
                 }
                 pr->u.var_ref = var_ref;
                 *sp++ = JS_AtomToValue(ctx, atom);
@@ -18432,7 +18446,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 sf->cur_pc = pc;
 
                 if (JS_GetGlobalVarRef(ctx, atom, sp))
-                    goto exception;
+                    GOTO(exception);
                 sp += 2;
                 BREAK;
             }
@@ -18440,20 +18454,20 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
         CASE(OP_goto) {
             pc += (int32_t)get_u32(pc);
             if (unlikely(js_poll_interrupts(ctx)))
-                goto exception;
+                GOTO(exception);
             BREAK;
         }
 #if SHORT_OPCODES
         CASE(OP_goto16) {
             pc += (int16_t)get_u16(pc);
             if (unlikely(js_poll_interrupts(ctx)))
-                goto exception;
+                GOTO(exception);
             BREAK;
         }
         CASE(OP_goto8) {
             pc += (int8_t)pc[0];
             if (unlikely(js_poll_interrupts(ctx)))
-                goto exception;
+                GOTO(exception);
             BREAK;
         }
 #endif
@@ -18474,7 +18488,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                     pc += (int32_t)get_u32(pc - 4) - 4;
                 }
                 if (unlikely(js_poll_interrupts(ctx)))
-                    goto exception;
+                    GOTO(exception);
                 BREAK;
             }
         CASE(OP_if_false)
@@ -18495,7 +18509,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                     pc += (int32_t)get_u32(pc - 4) - 4;
                 }
                 if (unlikely(js_poll_interrupts(ctx)))
-                    goto exception;
+                    GOTO(exception);
                 BREAK;
             }
 #if SHORT_OPCODES
@@ -18516,7 +18530,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                     pc += (int8_t)pc[-1] - 1;
                 }
                 if (unlikely(js_poll_interrupts(ctx)))
-                    goto exception;
+                    GOTO(exception);
                 BREAK;
             }
         CASE(OP_if_false8)
@@ -18536,7 +18550,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                     pc += (int8_t)pc[-1] - 1;
                 }
                 if (unlikely(js_poll_interrupts(ctx)))
-                    goto exception;
+                    GOTO(exception);
                 BREAK;
             }
 #endif
@@ -18570,7 +18584,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 if (unlikely(pos >= b->byte_code_len)) {
                 ret_fail:
                     JS_ThrowInternalError(ctx, "invalid ret value");
-                    goto exception;
+                    GOTO(exception);
                 }
                 sp--;
                 pc = b->byte_code_buf + pos;
@@ -18580,20 +18594,20 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
         CASE(OP_for_in_start) {
             sf->cur_pc = pc;
             if (js_for_in_start(ctx, sp))
-                goto exception;
+                GOTO(exception);
             BREAK;
         }
         CASE(OP_for_in_next) {
             sf->cur_pc = pc;
             if (js_for_in_next(ctx, sp))
-                goto exception;
+                GOTO(exception);
             sp += 2;
             BREAK;
         }
         CASE(OP_for_of_start) {
             sf->cur_pc = pc;
             if (js_for_of_start(ctx, sp, FALSE))
-                goto exception;
+                GOTO(exception);
             sp += 1;
             *sp++ = JS_NewCatchOffset(ctx, 0);
             BREAK;
@@ -18604,21 +18618,21 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 pc += 1;
                 sf->cur_pc = pc;
                 if (js_for_of_next(ctx, sp, offset))
-                    goto exception;
+                    GOTO(exception);
                 sp += 2;
                 BREAK;
             }
         CASE(OP_for_await_of_next) {
             sf->cur_pc = pc;
             if (js_for_await_of_next(ctx, sp))
-                goto exception;
+                GOTO(exception);
             sp++;
             BREAK;
         }
         CASE(OP_for_await_of_start) {
             sf->cur_pc = pc;
             if (js_for_of_start(ctx, sp, TRUE))
-                goto exception;
+                GOTO(exception);
             sp += 1;
             *sp++ = JS_NewCatchOffset(ctx, 0);
             BREAK;
@@ -18626,14 +18640,14 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
         CASE(OP_iterator_get_value_done) {
             sf->cur_pc = pc;
             if (js_iterator_get_value_done(ctx, sp))
-                goto exception;
+                GOTO(exception);
             sp += 1;
             BREAK;
         }
         CASE(OP_iterator_check_object) {
             if (unlikely(!JS_IsObject(sp[-1]))) {
                 JS_ThrowTypeError(ctx, "iterator must return an object");
-                goto exception;
+                GOTO(exception);
             }
             BREAK;
         }
@@ -18646,7 +18660,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
             if (!JS_IsUndefined(sp[-1])) {
                 sf->cur_pc = pc;
                 if (JS_IteratorClose(ctx, sp[-1], FALSE))
-                    goto exception;
+                    GOTO(exception);
                 JS_FreeValue(ctx, sp[-1]);
             }
             sp--;
@@ -18664,7 +18678,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 if (unlikely(sp == stack_buf)) {
                     JS_ThrowInternalError(ctx, "nip_catch");
                     JS_FreeValue(ctx, ret_val);
-                    goto exception;
+                    GOTO(exception);
                 }
                 sp[-1] = ret_val;
                 BREAK;
@@ -18678,7 +18692,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 ret = JS_Call(ctx, sp[-3], sp[-4],
                               1, (JSValueConst *)(sp - 1));
                 if (JS_IsException(ret))
-                    goto exception;
+                    GOTO(exception);
                 JS_FreeValue(ctx, sp[-1]);
                 sp[-1] = ret;
                 BREAK;
@@ -18695,7 +18709,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 method = JS_GetProperty(ctx, sp[-4], (flags & 1) ?
                                         JS_ATOM_throw : JS_ATOM_return);
                 if (JS_IsException(method))
-                    goto exception;
+                    GOTO(exception);
                 if (JS_IsUndefined(method) || JS_IsNull(method)) {
                     ret_flag = TRUE;
                 } else {
@@ -18708,7 +18722,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                                           1, (JSValueConst *)(sp - 1));
                     }
                     if (JS_IsException(ret))
-                        goto exception;
+                        GOTO(exception);
                     JS_FreeValue(ctx, sp[-1]);
                     sp[-1] = ret;
                     ret_flag = FALSE;
@@ -18778,7 +18792,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                     sf->cur_pc = pc;                                    \
                     val = JS_GetPropertyInternal(ctx, obj, atom, sp[-1], 0); \
                     if (unlikely(JS_IsException(val)))                  \
-                        goto exception;                                 \
+                        GOTO(exception);                                \
                 }                                                       \
                 if (keep) {                                             \
                     *sp++ = val;                                        \
@@ -18841,7 +18855,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                     JS_FreeValue(ctx, obj);
                     sp -= 2;
                     if (unlikely(ret < 0))
-                        goto exception;
+                        GOTO(exception);
                 }
                 BREAK;
             }
@@ -18855,7 +18869,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 pc += 4;
                 val = JS_NewSymbolFromAtom(ctx, atom, JS_ATOM_TYPE_PRIVATE);
                 if (JS_IsException(val))
-                    goto exception;
+                    GOTO(exception);
                 *sp++ = val;
                 BREAK;
             }
@@ -18870,7 +18884,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 sp[-2] = val;
                 sp--;
                 if (unlikely(JS_IsException(val)))
-                    goto exception;
+                    GOTO(exception);
                 BREAK;
             }
 
@@ -18882,7 +18896,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 JS_FreeValue(ctx, sp[-1]);
                 sp -= 3;
                 if (unlikely(ret < 0))
-                    goto exception;
+                    GOTO(exception);
                 BREAK;
             }
 
@@ -18893,7 +18907,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 JS_FreeValue(ctx, sp[-2]);
                 sp -= 2;
                 if (unlikely(ret < 0))
-                    goto exception;
+                    GOTO(exception);
                 BREAK;
             }
 
@@ -18908,7 +18922,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                                              JS_PROP_C_W_E | JS_PROP_THROW);
                 sp--;
                 if (unlikely(ret < 0))
-                    goto exception;
+                    GOTO(exception);
                 BREAK;
             }
 
@@ -18921,7 +18935,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
 
                 ret = JS_DefineObjectName(ctx, sp[-1], atom, JS_PROP_CONFIGURABLE);
                 if (unlikely(ret < 0))
-                    goto exception;
+                    GOTO(exception);
                 BREAK;
             }
         CASE(OP_set_name_computed)
@@ -18929,7 +18943,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 int ret;
                 ret = JS_DefineObjectNameComputed(ctx, sp[-1], sp[-2], JS_PROP_CONFIGURABLE);
                 if (unlikely(ret < 0))
-                    goto exception;
+                    GOTO(exception);
                 BREAK;
             }
         CASE(OP_set_proto)
@@ -18939,7 +18953,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 proto = sp[-1];
                 if (JS_IsObject(proto) || JS_IsNull(proto)) {
                     if (JS_SetPrototypeInternal(ctx, sp[-2], proto, TRUE) < 0)
-                        goto exception;
+                        GOTO(exception);
                 }
                 JS_FreeValue(ctx, proto);
                 sp--;
@@ -18966,7 +18980,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 if (is_computed) {
                     atom = JS_ValueToAtom(ctx, sp[-2]);
                     if (unlikely(atom == JS_ATOM_NULL))
-                        goto exception;
+                        GOTO(exception);
                     opcode += OP_define_method - OP_define_method_computed;
                 } else {
                     atom = get_u32(pc);
@@ -19005,7 +19019,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 }
                 sp -= 1 + is_computed;
                 if (unlikely(ret < 0))
-                    goto exception;
+                    GOTO(exception);
                 BREAK;
             }
 
@@ -19021,7 +19035,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 if (js_op_define_class(ctx, sp, atom, class_flags,
                                        var_refs, sf,
                                        (opcode == OP_define_class_computed)) < 0)
-                    goto exception;
+                    GOTO(exception);
                 BREAK;
             }
 
@@ -19051,7 +19065,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                             sp[-1] = JS_UNDEFINED;                      \
                         else                                            \
                             sp--;                                       \
-                        goto exception;                                 \
+                        GOTO(exception);                                \
                     }                                                   \
                 }                                                       \
                 if (keep) {                                             \
@@ -19100,12 +19114,12 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                         /* must be tested before JS_ToPropertyKey */
                         if (unlikely(JS_IsUndefined(sp[-2]) || JS_IsNull(sp[-2]))) {
                             JS_ThrowTypeError(ctx, "value has no property");
-                            goto exception;
+                            GOTO(exception);
                         }
                         sf->cur_pc = pc;
                         ret_val = JS_ToPropertyKey(ctx, sp[-1]);
                         if (JS_IsException(ret_val))
-                            goto exception;
+                            GOTO(exception);
                         JS_FreeValue(ctx, sp[-1]);
                         sp[-1] = ret_val;
                         break;
@@ -19113,7 +19127,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                     sf->cur_pc = pc;
                     val = JS_GetPropertyValue(ctx, sp[-2], JS_DupValue(ctx, sp[-1]));
                     if (unlikely(JS_IsException(val)))
-                        goto exception;
+                        GOTO(exception);
                 }
                 *sp++ = val;
                 BREAK;
@@ -19128,22 +19142,22 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 sf->cur_pc = pc;
                 atom = JS_ValueToAtom(ctx, sp[-1]);
                 if (atom == JS_ATOM_NULL)
-                    goto exception;
+                    GOTO(exception);
                 if (unlikely(JS_IsUndefined(sp[-2]))) {
                     JS_ThrowReferenceErrorNotDefined(ctx, atom);
                     JS_FreeAtom(ctx, atom);
-                    goto exception;
+                    GOTO(exception);
                 }
                 ret = JS_HasProperty(ctx, sp[-2], atom);
                 if (unlikely(ret <= 0)) {
                     if (ret < 0) {
                         JS_FreeAtom(ctx, atom);
-                        goto exception;
+                        GOTO(exception);
                     }
                     if (is_strict_mode(ctx)) {
                         JS_ThrowReferenceErrorNotDefined(ctx, atom);
                         JS_FreeAtom(ctx, atom);
-                        goto exception;
+                        GOTO(exception);
                     }
                     val = JS_UNDEFINED;
                 } else {
@@ -19151,7 +19165,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 }
                 JS_FreeAtom(ctx, atom);
                 if (unlikely(JS_IsException(val)))
-                    goto exception;
+                    GOTO(exception);
                 sp[0] = val;
                 sp++;
                 BREAK;
@@ -19164,11 +19178,11 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 sf->cur_pc = pc;
                 atom = JS_ValueToAtom(ctx, sp[-1]);
                 if (unlikely(atom == JS_ATOM_NULL))
-                    goto exception;
+                    GOTO(exception);
                 val = JS_GetPropertyInternal(ctx, sp[-2], atom, sp[-3], FALSE);
                 JS_FreeAtom(ctx, atom);
                 if (unlikely(JS_IsException(val)))
-                    goto exception;
+                    GOTO(exception);
                 JS_FreeValue(ctx, sp[-1]);
                 JS_FreeValue(ctx, sp[-2]);
                 JS_FreeValue(ctx, sp[-3]);
@@ -19224,7 +19238,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                     JS_FreeValue(ctx, sp[-3]);
                     sp -= 3;
                     if (unlikely(ret < 0))
-                        goto exception;
+                        GOTO(exception);
                 }
                 BREAK;
             }
@@ -19236,12 +19250,12 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 sf->cur_pc = pc;
                 atom = JS_ValueToAtom(ctx, sp[-2]);
                 if (unlikely(atom == JS_ATOM_NULL))
-                    goto exception;
+                    GOTO(exception);
                 if (unlikely(JS_IsUndefined(sp[-3]))) {
                     if (is_strict_mode(ctx)) {
                         JS_ThrowReferenceErrorNotDefined(ctx, atom);
                         JS_FreeAtom(ctx, atom);
-                        goto exception;
+                        GOTO(exception);
                     } else {
                         sp[-3] = JS_DupValue(ctx, ctx->global_obj);
                     }
@@ -19250,12 +19264,12 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 if (unlikely(ret <= 0)) {
                     if (unlikely(ret < 0)) {
                         JS_FreeAtom(ctx, atom);
-                        goto exception;
+                        GOTO(exception);
                     }
                     if (is_strict_mode(ctx)) {
                         JS_ThrowReferenceErrorNotDefined(ctx, atom);
                         JS_FreeAtom(ctx, atom);
-                        goto exception;
+                        GOTO(exception);
                     }
                 }
                 ret = JS_SetPropertyInternal(ctx, sp[-3], atom, sp[-1], sp[-3], JS_PROP_THROW_STRICT);
@@ -19264,7 +19278,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 JS_FreeValue(ctx, sp[-3]);
                 sp -= 3;
                 if (unlikely(ret < 0))
-                    goto exception;
+                    GOTO(exception);
                 BREAK;
             }
 
@@ -19275,11 +19289,11 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 sf->cur_pc = pc;
                 if (JS_VALUE_GET_TAG(sp[-3]) != JS_TAG_OBJECT) {
                     JS_ThrowTypeErrorNotAnObject(ctx);
-                    goto exception;
+                    GOTO(exception);
                 }
                 atom = JS_ValueToAtom(ctx, sp[-2]);
                 if (unlikely(atom == JS_ATOM_NULL))
-                    goto exception;
+                    GOTO(exception);
                 ret = JS_SetPropertyInternal(ctx, sp[-3], atom, sp[-1], sp[-4],
                                              JS_PROP_THROW_STRICT);
                 JS_FreeAtom(ctx, atom);
@@ -19288,7 +19302,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 JS_FreeValue(ctx, sp[-2]);
                 sp -= 4;
                 if (ret < 0)
-                    goto exception;
+                    GOTO(exception);
                 BREAK;
             }
 
@@ -19299,7 +19313,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                                                   JS_PROP_C_W_E | JS_PROP_THROW);
                 sp -= 1;
                 if (unlikely(ret < 0))
-                    goto exception;
+                    GOTO(exception);
                 BREAK;
             }
 
@@ -19307,7 +19321,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
             {
                 sf->cur_pc = pc;
                 if (js_append_enumerate(ctx, sp))
-                    goto exception;
+                    GOTO(exception);
                 JS_FreeValue(ctx, *--sp);
                 BREAK;
             }
@@ -19325,7 +19339,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 if (JS_CopyDataProperties(ctx, sp[-1 - (mask & 3)],
                                           sp[-1 - ((mask >> 2) & 7)],
                                           sp[-1 - ((mask >> 5) & 7)], 0))
-                    goto exception;
+                    GOTO(exception);
                 BREAK;
             }
 
@@ -19351,11 +19365,11 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                     sp[-2] = JS_ConcatString(ctx, op1, op2);
                     sp--;
                     if (JS_IsException(sp[-1]))
-                        goto exception;
+                        GOTO(exception);
                 } else {
                     sf->cur_pc = pc;
                     if (js_add_slow(ctx, sp))
-                        goto exception;
+                        GOTO(exception);
                     sp--;
                 }
                 BREAK;
@@ -19392,7 +19406,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                     } else {
                         op2 = JS_ConcatString(ctx, JS_DupValue(ctx, *pv), op2);
                         if (JS_IsException(op2))
-                            goto exception;
+                            GOTO(exception);
                         set_value(ctx, pv, op2);
                     }
                 } else {
@@ -19404,7 +19418,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                     ops[1] = op2;
                     sp--;
                     if (js_add_slow(ctx, ops + 2))
-                        goto exception;
+                        GOTO(exception);
                     set_value(ctx, pv, ops[0]);
                 }
                 BREAK;
@@ -19428,7 +19442,10 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                                              JS_VALUE_GET_FLOAT64(op2));
                     sp--;
                 } else {
-                    goto binary_arith_slow;
+                    sf->cur_pc = pc;
+                    if (js_binary_arith_slow(ctx, sp, opcode))
+                        GOTO(exception);
+                    sp--;
                 }
                 BREAK;
             }
@@ -19461,7 +19478,10 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                     sp[-2] = __JS_NewFloat64(ctx, d);
                     sp--;
                 } else {
-                    goto binary_arith_slow;
+                    sf->cur_pc = pc;
+                    if (js_binary_arith_slow(ctx, sp, opcode))
+                        GOTO(exception);
+                    sp--;
                 }
                 BREAK;
             }
@@ -19477,7 +19497,10 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                     sp[-2] = JS_NewFloat64(ctx, (double)v1 / (double)v2);
                     sp--;
                 } else {
-                    goto binary_arith_slow;
+                    sf->cur_pc = pc;
+                    if (js_binary_arith_slow(ctx, sp, opcode))
+                        GOTO(exception);
+                    sp--;
                 }
                 BREAK;
             }
@@ -19493,20 +19516,23 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                     /* We must avoid v2 = 0, v1 = INT32_MIN and v2 =
                        -1 and the cases where the result is -0. */
                     if (unlikely(v1 < 0 || v2 <= 0))
-                        goto binary_arith_slow;
+                        goto binary_arith_slow_mod;
                     r = v1 % v2;
                     sp[-2] = JS_NewInt32(ctx, r);
                     sp--;
                 } else {
-                    goto binary_arith_slow;
+                binary_arith_slow_mod:
+                    sf->cur_pc = pc;
+                    if (js_binary_arith_slow(ctx, sp, opcode))
+                        GOTO(exception);
+                    sp--;
                 }
                 BREAK;
             }
         CASE(OP_pow) {
-        binary_arith_slow:
             sf->cur_pc = pc;
             if (js_binary_arith_slow(ctx, sp, opcode))
-                goto exception;
+                GOTO(exception);
             sp--;
             BREAK;
         }
@@ -19523,7 +19549,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 } else {
                     sf->cur_pc = pc;
                     if (js_unary_arith_slow(ctx, sp, opcode))
-                        goto exception;
+                        GOTO(exception);
                 }
                 BREAK;
             }
@@ -19556,7 +19582,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 } else {
                     sf->cur_pc = pc;
                     if (js_unary_arith_slow(ctx, sp, opcode))
-                        goto exception;
+                        GOTO(exception);
                 }
                 BREAK;
             }
@@ -19574,7 +19600,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 inc_slow:
                     sf->cur_pc = pc;
                     if (js_unary_arith_slow(ctx, sp, opcode))
-                        goto exception;
+                        GOTO(exception);
                 }
                 BREAK;
             }
@@ -19592,7 +19618,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 dec_slow:
                     sf->cur_pc = pc;
                     if (js_unary_arith_slow(ctx, sp, opcode))
-                        goto exception;
+                        GOTO(exception);
                 }
                 BREAK;
             }
@@ -19610,7 +19636,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 post_inc_slow:
                     sf->cur_pc = pc;
                     if (js_post_inc_slow(ctx, sp, opcode))
-                        goto exception;
+                        GOTO(exception);
                 }
                 sp++;
                 BREAK;
@@ -19629,7 +19655,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 post_dec_slow:
                     sf->cur_pc = pc;
                     if (js_post_inc_slow(ctx, sp, opcode))
-                        goto exception;
+                        GOTO(exception);
                 }
                 sp++;
                 BREAK;
@@ -19655,7 +19681,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                        be destroyed before JS code accesses it */
                     op1 = JS_DupValue(ctx, op1);
                     if (js_unary_arith_slow(ctx, &op1 + 1, OP_inc))
-                        goto exception;
+                        GOTO(exception);
                     set_value(ctx, &var_buf[idx], op1);
                 }
                 BREAK;
@@ -19681,7 +19707,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                        be destroyed before JS code accesses it */
                     op1 = JS_DupValue(ctx, op1);
                     if (js_unary_arith_slow(ctx, &op1 + 1, OP_dec))
-                        goto exception;
+                        GOTO(exception);
                     set_value(ctx, &var_buf[idx], op1);
                 }
                 BREAK;
@@ -19695,7 +19721,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 } else {
                     sf->cur_pc = pc;
                     if (js_not_slow(ctx, sp))
-                        goto exception;
+                        GOTO(exception);
                 }
                 BREAK;
             }
@@ -19715,7 +19741,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 } else {
                     sf->cur_pc = pc;
                     if (js_binary_logic_slow(ctx, sp, opcode))
-                        goto exception;
+                        GOTO(exception);
                     sp--;
                 }
                 BREAK;
@@ -19736,7 +19762,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 } else {
                     sf->cur_pc = pc;
                     if (js_shr_slow(ctx, sp))
-                        goto exception;
+                        GOTO(exception);
                     sp--;
                 }
                 BREAK;
@@ -19756,7 +19782,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 } else {
                     sf->cur_pc = pc;
                     if (js_binary_logic_slow(ctx, sp, opcode))
-                        goto exception;
+                        GOTO(exception);
                     sp--;
                 }
                 BREAK;
@@ -19774,7 +19800,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 } else {
                     sf->cur_pc = pc;
                     if (js_binary_logic_slow(ctx, sp, opcode))
-                        goto exception;
+                        GOTO(exception);
                     sp--;
                 }
                 BREAK;
@@ -19792,7 +19818,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 } else {
                     sf->cur_pc = pc;
                     if (js_binary_logic_slow(ctx, sp, opcode))
-                        goto exception;
+                        GOTO(exception);
                     sp--;
                 }
                 BREAK;
@@ -19810,7 +19836,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 } else {
                     sf->cur_pc = pc;
                     if (js_binary_logic_slow(ctx, sp, opcode))
-                        goto exception;
+                        GOTO(exception);
                     sp--;
                 }
                 BREAK;
@@ -19828,7 +19854,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 } else {                                                \
                     sf->cur_pc = pc;                                    \
                     if (slow_call)                                      \
-                        goto exception;                                 \
+                        GOTO(exception);                                \
                     sp--;                                               \
                 }                                                       \
                 BREAK;                                                  \
@@ -19846,21 +19872,21 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
         CASE(OP_in) {
             sf->cur_pc = pc;
             if (js_operator_in(ctx, sp))
-                goto exception;
+                GOTO(exception);
             sp--;
             BREAK;
         }
         CASE(OP_private_in) {
             sf->cur_pc = pc;
             if (js_operator_private_in(ctx, sp))
-                goto exception;
+                GOTO(exception);
             sp--;
             BREAK;
         }
         CASE(OP_instanceof) {
             sf->cur_pc = pc;
             if (js_operator_instanceof(ctx, sp))
-                goto exception;
+                GOTO(exception);
             sp--;
             BREAK;
         }
@@ -19878,7 +19904,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
         CASE(OP_delete) {
             sf->cur_pc = pc;
             if (js_operator_delete(ctx, sp))
-                goto exception;
+                GOTO(exception);
             sp--;
             BREAK;
         }
@@ -19893,7 +19919,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
 
                 ret = JS_DeleteGlobalVar(ctx, atom);
                 if (unlikely(ret < 0))
-                    goto exception;
+                    GOTO(exception);
                 *sp++ = JS_NewBool(ctx, ret);
                 BREAK;
             }
@@ -19903,7 +19929,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 sf->cur_pc = pc;
                 ret_val = JS_ToObject(ctx, sp[-1]);
                 if (JS_IsException(ret_val))
-                    goto exception;
+                    GOTO(exception);
                 JS_FreeValue(ctx, sp[-1]);
                 sp[-1] = ret_val;
             }
@@ -19920,7 +19946,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 sf->cur_pc = pc;
                 ret_val = JS_ToPropertyKey(ctx, sp[-1]);
                 if (JS_IsException(ret_val))
-                    goto exception;
+                    GOTO(exception);
                 JS_FreeValue(ctx, sp[-1]);
                 sp[-1] = ret_val;
                 break;
@@ -19933,7 +19959,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
             if (JS_VALUE_GET_TAG(sp[-1]) != JS_TAG_STRING) {
                 ret_val = JS_ToString(ctx, sp[-1]);
                 if (JS_IsException(ret_val))
-                    goto exception;
+                    GOTO(exception);
                 JS_FreeValue(ctx, sp[-1]);
                 sp[-1] = ret_val;
             }
@@ -19959,12 +19985,12 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 obj = sp[-1];
                 ret = JS_HasProperty(ctx, obj, atom);
                 if (unlikely(ret < 0))
-                    goto exception;
+                    GOTO(exception);
                 if (ret) {
                     if (is_with) {
                         ret = js_has_unscopable(ctx, obj, atom);
                         if (unlikely(ret < 0))
-                            goto exception;
+                            GOTO(exception);
                         if (ret)
                             goto no_with;
                     }
@@ -19974,16 +20000,16 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                         ret = JS_HasProperty(ctx, obj, atom);
                         if (unlikely(ret <= 0)) {
                             if (ret < 0)
-                                goto exception;
+                                GOTO(exception);
                             if (is_strict_mode(ctx)) {
                                 JS_ThrowReferenceErrorNotDefined(ctx, atom);
-                                goto exception;
+                                GOTO(exception);
                             } 
                             val = JS_UNDEFINED;
                         } else {
                             val = JS_GetProperty(ctx, obj, atom);
                             if (unlikely(JS_IsException(val)))
-                                goto exception;
+                                GOTO(exception);
                         }
                         set_value(ctx, &sp[-1], val);
                         break;
@@ -19992,10 +20018,10 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                         ret = JS_HasProperty(ctx, obj, atom);
                         if (unlikely(ret <= 0)) {
                             if (ret < 0)
-                                goto exception;
+                                GOTO(exception);
                             if (is_strict_mode(ctx)) {
                                 JS_ThrowReferenceErrorNotDefined(ctx, atom);
-                                goto exception;
+                                GOTO(exception);
                             } 
                         }
                         ret = JS_SetPropertyInternal(ctx, obj, atom, sp[-2], obj,
@@ -20003,12 +20029,12 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                         JS_FreeValue(ctx, sp[-1]);
                         sp -= 2;
                         if (unlikely(ret < 0))
-                            goto exception;
+                            GOTO(exception);
                         break;
                     case OP_with_delete_var:
                         ret = JS_DeleteProperty(ctx, obj, atom, 0);
                         if (unlikely(ret < 0))
-                            goto exception;
+                            GOTO(exception);
                         JS_FreeValue(ctx, sp[-1]);
                         sp[-1] = JS_NewBool(ctx, ret);
                         break;
@@ -20021,13 +20047,13 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                         /* in Object Environment Records, GetBindingValue() calls HasProperty() */
                         ret = JS_HasProperty(ctx, obj, atom);
                         if (unlikely(ret < 0))
-                            goto exception;
+                            GOTO(exception);
                         if (!ret) {
                             val = JS_UNDEFINED;
                         } else {
                             val = JS_GetProperty(ctx, obj, atom);
                             if (unlikely(JS_IsException(val)))
-                                goto exception;
+                                GOTO(exception);
                         }
                         *sp++ = val;
                         break;
@@ -20044,24 +20070,24 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
 
         CASE(OP_await) {
             ret_val = JS_NewInt32(ctx, FUNC_RET_AWAIT);
-            goto done_generator;
+            GOTO(done_generator);
         }
         CASE(OP_yield) {
             ret_val = JS_NewInt32(ctx, FUNC_RET_YIELD);
-            goto done_generator;
+            GOTO(done_generator);
         }
         CASE_FALLTHROUGH(OP_yield_star, OP_async_yield_star)
         CASE(OP_async_yield_star) {
             ret_val = JS_NewInt32(ctx, FUNC_RET_YIELD_STAR);
-            goto done_generator;
+            GOTO(done_generator);
         }
         CASE(OP_return_async) {
             ret_val = JS_UNDEFINED;
-            goto done_generator;
+            GOTO(done_generator);
         }
         CASE(OP_initial_yield) {
             ret_val = JS_NewInt32(ctx, FUNC_RET_INITIAL_YIELD);
-            goto done_generator;
+            GOTO(done_generator);
         }
 
         CASE(OP_nop) {
@@ -20070,57 +20096,60 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
         CASE(OP_is_undefined_or_null) {
             if (JS_VALUE_GET_TAG(sp[-1]) == JS_TAG_UNDEFINED ||
                 JS_VALUE_GET_TAG(sp[-1]) == JS_TAG_NULL) {
-                goto set_true;
+                sp[-1] = JS_TRUE;
             } else {
-                goto free_and_set_false;
+                JS_FreeValue(ctx, sp[-1]);
+                sp[-1] = JS_FALSE;
             }
+            BREAK;
         }
 #if SHORT_OPCODES
         CASE(OP_is_undefined) {
             if (JS_VALUE_GET_TAG(sp[-1]) == JS_TAG_UNDEFINED) {
-                goto set_true;
+                sp[-1] = JS_TRUE;
             } else {
-                goto free_and_set_false;
+                JS_FreeValue(ctx, sp[-1]);
+                sp[-1] = JS_FALSE;
             }
+            BREAK;
         }
         CASE(OP_is_null) {
             if (JS_VALUE_GET_TAG(sp[-1]) == JS_TAG_NULL) {
-                goto set_true;
+                sp[-1] = JS_TRUE;
             } else {
-                goto free_and_set_false;
+                JS_FreeValue(ctx, sp[-1]);
+                sp[-1] = JS_FALSE;
             }
+            BREAK;
         }
             /* XXX: could merge to a single opcode */
         CASE(OP_typeof_is_undefined) {
             /* different from OP_is_undefined because of isHTMLDDA */
             if (js_operator_typeof(ctx, sp[-1]) == JS_ATOM_undefined) {
-                goto free_and_set_true;
+                JS_FreeValue(ctx, sp[-1]);
+                sp[-1] = JS_TRUE;
             } else {
-                goto free_and_set_false;
+                JS_FreeValue(ctx, sp[-1]);
+                sp[-1] = JS_FALSE;
             }
+            BREAK;
         }
         CASE(OP_typeof_is_function) {
             if (js_operator_typeof(ctx, sp[-1]) == JS_ATOM_function) {
-                goto free_and_set_true;
+                JS_FreeValue(ctx, sp[-1]);
+                sp[-1] = JS_TRUE;
             } else {
-                goto free_and_set_false;
+                JS_FreeValue(ctx, sp[-1]);
+                sp[-1] = JS_FALSE;
             }
+            BREAK;
         }
-        free_and_set_true:
-            JS_FreeValue(ctx, sp[-1]);
 #endif
-        set_true:
-            sp[-1] = JS_TRUE;
-            BREAK;
-        free_and_set_false:
-            JS_FreeValue(ctx, sp[-1]);
-            sp[-1] = JS_FALSE;
-            BREAK;
         CASE(OP_invalid)
         DEFAULT {
             JS_ThrowInternalError(ctx, "invalid opcode: pc=%u opcode=0x%02x",
                                   (int)(pc - b->byte_code_buf - 1), opcode);
-            goto exception;
+            GOTO(exception);
         }
         }
     }

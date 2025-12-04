@@ -345,6 +345,8 @@ typedef struct JSStackFrame {
     /* only used in generators. Current stack pointer value. NULL if
        the function is running. */
     JSValue *cur_sp;
+    /* Temps used only during JS_CallInternal()'s interpreter loop. */
+    JSValue *local_buf;
 } JSStackFrame;
 
 typedef enum {
@@ -17350,7 +17352,7 @@ typedef enum {
 #define FUNC_RET_INITIAL_YIELD 3
 
 #if TAIL_CALL_DISPATCH
-#define TAIL_CALL_ARGS(pc) pc, sp, b, ctx, var_buf, arg_buf, var_refs, sf, ret_val, caller_ctx, this_obj, new_target, argc, argv, local_buf
+#define TAIL_CALL_ARGS(pc) pc, sp, b, ctx, var_buf, arg_buf, var_refs, sf, ret_val, caller_ctx, this_obj, new_target, argc, argv
 #define TAIL_CALL_PARAMS \
      const uint8_t *pc, \
      JSValue *sp, \
@@ -17365,8 +17367,7 @@ typedef enum {
      JSValueConst this_obj, \
      JSValueConst new_target, \
      int argc, \
-     JSValue *argv, \
-     JSValue* local_buf
+     JSValue *argv
 
 /* With tail-call dispatch, each CASE and exception/done/done_generator blocks
    become js_OP_<id> and JS_CallInternal_<label> functions with this signature */
@@ -17439,7 +17440,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
     JSStackFrame sf_s, *sf = &sf_s;
     const uint8_t *pc;
     int arg_allocated_size, i;
-    JSValue *local_buf, *stack_buf, *var_buf, *arg_buf, *sp, ret_val = JS_UNDEFINED;
+    JSValue *stack_buf, *var_buf, *arg_buf, *sp, ret_val = JS_UNDEFINED;
     JSVarRef **var_refs;
     size_t alloca_size;
 
@@ -17491,7 +17492,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
             b = p->u.func.function_bytecode;
             ctx = b->realm;
             var_refs = p->u.func.var_refs;
-            local_buf = arg_buf = sf->arg_buf;
+            sf->local_buf = arg_buf = sf->arg_buf;
             var_buf = sf->var_buf;
             stack_buf = sf->var_buf + b->var_count;
             sp = sf->cur_sp;
@@ -17538,17 +17539,17 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
     sf->cur_func = (JSValue)func_obj;
     var_refs = p->u.func.var_refs;
 
-    local_buf = alloca(alloca_size);
+    sf->local_buf = alloca(alloca_size);
     if (unlikely(arg_allocated_size)) {
         int n = min_int(argc, b->arg_count);
-        arg_buf = local_buf;
+        arg_buf = sf->local_buf;
         for(i = 0; i < n; i++)
             arg_buf[i] = JS_DupValue(caller_ctx, argv[i]);
         for(; i < b->arg_count; i++)
             arg_buf[i] = JS_UNDEFINED;
         sf->arg_count = b->arg_count;
     }
-    var_buf = local_buf + arg_allocated_size;
+    var_buf = sf->local_buf + arg_allocated_size;
     sf->var_buf = var_buf;
     sf->arg_buf = arg_buf;
 
@@ -20329,7 +20330,7 @@ END_BRACE  /* ends JS_CallInternal() */
             close_var_refs(rt, b, sf);
         }
         /* free the local variables and stack */
-        for(pval = local_buf; pval < sp; pval++) {
+        for(pval = sf->local_buf; pval < sp; pval++) {
             JS_FreeValue(ctx, *pval);
         }
     }

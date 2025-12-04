@@ -346,6 +346,7 @@ typedef struct JSStackFrame {
        the function is running. */
     JSValue *cur_sp;
     /* Temps used only during JS_CallInternal()'s interpreter loop. */
+    JSContext *caller_ctx;
     JSValue *local_buf;
 } JSStackFrame;
 
@@ -17352,7 +17353,7 @@ typedef enum {
 #define FUNC_RET_INITIAL_YIELD 3
 
 #if TAIL_CALL_DISPATCH
-#define TAIL_CALL_ARGS(pc) pc, sp, b, ctx, var_buf, arg_buf, var_refs, sf, ret_val, caller_ctx, this_obj, new_target, argc, argv
+#define TAIL_CALL_ARGS(pc) pc, sp, b, ctx, var_buf, arg_buf, var_refs, sf, ret_val, this_obj, new_target, argc, argv
 #define TAIL_CALL_PARAMS \
      const uint8_t *pc, \
      JSValue *sp, \
@@ -17363,7 +17364,6 @@ typedef enum {
      JSVarRef **var_refs, \
      JSStackFrame *sf, \
      JSValue ret_val, \
-     JSContext *caller_ctx, \
      JSValueConst this_obj, \
      JSValueConst new_target, \
      int argc, \
@@ -17488,6 +17488,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
             /* func_obj get contains a pointer to JSFuncAsyncState */
             /* the stack frame is already allocated */
             sf = &s->frame;
+            sf->caller_ctx = caller_ctx;
             p = JS_VALUE_GET_OBJ(sf->cur_func);
             b = p->u.func.function_bytecode;
             ctx = b->realm;
@@ -17565,6 +17566,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
     sf->prev_frame = rt->current_stack_frame;
     rt->current_stack_frame = sf;
     ctx = b->realm; /* set the current realm */
+    sf->caller_ctx = caller_ctx;
 
 #if TAIL_CALL_DISPATCH
  restart: DISPATCH_NO_TAIL;
@@ -18016,7 +18018,7 @@ END_BRACE  /* ends JS_CallInternal() */
             /* return TRUE if 'this' should be returned */
             if (!JS_IsObject(sp[-1])) {
                 if (!JS_IsUndefined(sp[-1])) {
-                    JS_ThrowTypeError(caller_ctx, "derived class constructor must return an object or undefined");
+                    JS_ThrowTypeError(sf->caller_ctx, "derived class constructor must return an object or undefined");
                     GOTO(exception);
                 }
                 sp[0] = JS_TRUE;
@@ -18470,7 +18472,7 @@ END_BRACE  /* ends JS_CallInternal() */
                 idx = get_u16(pc);
                 pc += 2;
                 if (unlikely(JS_IsUninitialized(var_buf[idx]))) {
-                    JS_ThrowReferenceErrorUninitialized2(caller_ctx, b, idx, FALSE);
+                    JS_ThrowReferenceErrorUninitialized2(sf->caller_ctx, b, idx, FALSE);
                     GOTO(exception);
                 }
                 sp[0] = JS_DupValue(ctx, var_buf[idx]);
@@ -18538,7 +18540,7 @@ END_BRACE  /* ends JS_CallInternal() */
                 pr = add_property(ctx, JS_VALUE_GET_OBJ(sp[-1]), atom,
                                   JS_PROP_WRITABLE | JS_PROP_VARREF);
                 if (!pr) {
-                    JSRuntime *rt = caller_ctx->rt;
+                    JSRuntime *rt = sf->caller_ctx->rt;
                     free_var_ref(rt, var_ref);
                     GOTO(exception);
                 }
@@ -20273,7 +20275,7 @@ END_BRACE  /* ends JS_CallInternal() */
 
 #if TAIL_CALL_DISPATCH
  LABEL_FUNC(exception) BEGIN_BRACE
-    JSRuntime *rt = caller_ctx->rt;
+    JSRuntime *rt = sf->caller_ctx->rt;
     JSValue *stack_buf = sf->var_buf + b->var_count;
 #else
  exception:
@@ -20319,7 +20321,7 @@ END_BRACE  /* ends JS_CallInternal() */
   restart: DISPATCH_NO_TAIL;
  END_BRACE
  LABEL_FUNC(done) BEGIN_BRACE
-    JSRuntime *rt = caller_ctx->rt;
+    JSRuntime *rt = sf->caller_ctx->rt;
 #else
  done:
 #endif
@@ -20340,7 +20342,7 @@ END_BRACE  /* ends JS_CallInternal() */
 #if TAIL_CALL_DISPATCH
  END_BRACE
  LABEL_FUNC(done_generator) BEGIN_BRACE
-    JSRuntime *rt = caller_ctx->rt;
+    JSRuntime *rt = sf->caller_ctx->rt;
 #else
  done_generator:
 #endif

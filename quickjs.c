@@ -50,9 +50,17 @@
 #define OPTIMIZE         1
 #define SHORT_OPCODES    1
 #if defined(EMSCRIPTEN)
-#define DIRECT_DISPATCH  0
+#define DIRECT_DISPATCH     0
+#define TAIL_CALL_DISPATCH  0
+#elif __has_attribute(preserve_none) && __has_attribute(musttail)
+#warning Using tail-call dispatch
+#define DIRECT_DISPATCH     0
+#define TAIL_CALL_DISPATCH  1
+#define PRESERVE_NONE __attribute__((preserve_none))
+#define MUSTTAIL __attribute__((musttail))
 #else
-#define DIRECT_DISPATCH  1
+#define DIRECT_DISPATCH    1
+#define TAIL_CALL_DISPATCH 0
 #endif
 
 #if defined(__APPLE__)
@@ -17341,6 +17349,84 @@ typedef enum {
 #define FUNC_RET_YIELD_STAR    2
 #define FUNC_RET_INITIAL_YIELD 3
 
+#if TAIL_CALL_DISPATCH
+#define TAIL_CALL_ARGS(pc) pc, sp, b, ctx, var_buf, arg_buf, var_refs, sf, ret_val, caller_ctx, this_obj, new_target, argc, argv, local_buf
+#define TAIL_CALL_PARAMS \
+     const uint8_t *pc, \
+     JSValue *sp, \
+     JSFunctionBytecode *b, \
+     JSContext *ctx, \
+     JSValue *var_buf, \
+     JSValue *arg_buf, \
+     JSVarRef **var_refs, \
+     JSStackFrame *sf, \
+     JSValue ret_val, \
+     JSContext *caller_ctx, \
+     JSValueConst this_obj, \
+     JSValueConst new_target, \
+     int argc, \
+     JSValue *argv, \
+     JSValue* local_buf
+
+/* With tail-call dispatch, each CASE and exception/done/done_generator blocks
+   become js_OP_<id> and JS_CallInternal_<label> functions with this signature */
+typedef PRESERVE_NONE JSValue(* const JS_CallInternal_Handler)(TAIL_CALL_PARAMS);
+
+#define LABEL_FUNC(label) static PRESERVE_NONE JSValue JS_CallInternal_##label(TAIL_CALL_PARAMS)
+LABEL_FUNC(exception);
+LABEL_FUNC(done);
+LABEL_FUNC(done_generator);
+
+#define BEGIN_BRACE {
+#define END_BRACE }
+
+/* Patch up fallthrough cases to their targets in dispatch table.
+   sed -n 's/^ *CASE_FALLTHROUGH(\(.*\), \(.*\))/#define js_\1 js_\2/p' quickjs.c */
+#define js_OP_push_minus1 js_OP_push_7
+#define js_OP_push_0 js_OP_push_7
+#define js_OP_push_1 js_OP_push_7
+#define js_OP_push_2 js_OP_push_7
+#define js_OP_push_3 js_OP_push_7
+#define js_OP_push_4 js_OP_push_7
+#define js_OP_push_5 js_OP_push_7
+#define js_OP_push_6 js_OP_push_7
+#define js_OP_call0 js_OP_call3
+#define js_OP_call1 js_OP_call3
+#define js_OP_call2 js_OP_call3
+#define js_OP_call js_OP_tail_call
+#define js_OP_call_method js_OP_tail_call_method
+#define js_OP_get_var_undef js_OP_get_var
+#define js_OP_put_var js_OP_put_var_init
+#define js_OP_make_loc_ref js_OP_make_var_ref_ref
+#define js_OP_make_arg_ref js_OP_make_var_ref_ref
+#define js_OP_define_method js_OP_define_method_computed
+#define js_OP_define_class js_OP_define_class_computed
+#define js_OP_with_get_var js_OP_with_get_ref
+#define js_OP_with_put_var js_OP_with_get_ref
+#define js_OP_with_delete_var js_OP_with_get_ref
+#define js_OP_with_make_ref js_OP_with_get_ref
+#define js_OP_yield_star js_OP_async_yield_star
+
+#define DEF(id, size, n_pop, n_push, f) static PRESERVE_NONE JSValue js_OP_##id(TAIL_CALL_PARAMS);
+#if SHORT_OPCODES
+#define def(id, size, n_pop, n_push, f)
+#else
+#define def(id, size, n_pop, n_push, f) static PRESERVE_NONE JSValue js_OP_##id(TAIL_CALL_PARAMS);
+#endif
+#include "quickjs-opcode.h"
+
+static const JS_CallInternal_Handler js_tail_dispatch_table[256] = {
+#define DEF(id, size, n_pop, n_push, f) js_OP_##id,
+#if SHORT_OPCODES
+#define def(id, size, n_pop, n_push, f)
+#else
+#define def(id, size, n_pop, n_push, f) js_OP_##id,
+#endif
+#include "quickjs-opcode.h"
+        [ OP_COUNT ... 255 ] = js_OP_invalid
+};
+#endif  /* TAIL_CALL_DISPATCH */
+
 /* argv[] is modified if (flags & JS_CALL_FLAG_COPY_ARGV) = 0. */
 static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                                JSValueConst this_obj, JSValueConst new_target,
@@ -17353,11 +17439,21 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
     JSStackFrame sf_s, *sf = &sf_s;
     const uint8_t *pc;
     int arg_allocated_size, i;
-    JSValue *local_buf, *stack_buf, *var_buf, *arg_buf, *sp, ret_val, *pval;
+    JSValue *local_buf, *stack_buf, *var_buf, *arg_buf, *sp, ret_val = JS_UNDEFINED;
     JSVarRef **var_refs;
     size_t alloca_size;
 
-#if !DIRECT_DISPATCH
+#if TAIL_CALL_DISPATCH
+#define CASE(op)            static PRESERVE_NONE JSValue js_##op(TAIL_CALL_PARAMS)
+/* Fallthroughs are patched up directly in dispatch table. Alternatively, stub:
+   CASE(op) { MUSTTAIL return js_tail_dispatch_table[target](TAIL_CALL_ARGS(pc)); } */
+#define CASE_FALLTHROUGH(op, target)
+#define DISPATCH_NO_TAIL    return js_tail_dispatch_table[*pc](TAIL_CALL_ARGS(pc+1))
+#define BREAK               MUSTTAIL DISPATCH_NO_TAIL
+#define DEFAULT
+#define GOTO_NO_TAIL(label) return JS_CallInternal_##label(TAIL_CALL_ARGS(pc))
+#define GOTO(label)         MUSTTAIL GOTO_NO_TAIL(label)
+#elif !DIRECT_DISPATCH
 #define SWITCH(pc)      switch (*pc++)
 #define CASE(op)        case op:
 #define CASE_FALLTHROUGH(op, target)  case op:
@@ -17469,9 +17565,17 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
     rt->current_stack_frame = sf;
     ctx = b->realm; /* set the current realm */
 
+#if TAIL_CALL_DISPATCH
+ restart: DISPATCH_NO_TAIL;
+ exception: GOTO_NO_TAIL(exception);
+END_BRACE  /* ends JS_CallInternal() */
+
+#else
  restart:
     for(;;) {
         SWITCH(pc) {
+#endif
+
         CASE(OP_push_i32) {
             *sp++ = JS_NewInt32(ctx, get_u32(pc));
             pc += 4;
@@ -18672,19 +18776,19 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
         CASE(OP_nip_catch)
             {
                 JSValue *stack_buf = sf->var_buf + b->var_count;
-                JSValue ret_val;
+                JSValue _ret_val;
                 /* catch_offset ... ret_val -> ret_eval */
-                ret_val = *--sp;
+                _ret_val = *--sp;
                 while (sp > stack_buf &&
                        JS_VALUE_GET_TAG(sp[-1]) != JS_TAG_CATCH_OFFSET) {
                     JS_FreeValue(ctx, *--sp);
                 }
                 if (unlikely(sp == stack_buf)) {
                     JS_ThrowInternalError(ctx, "nip_catch");
-                    JS_FreeValue(ctx, ret_val);
+                    JS_FreeValue(ctx, _ret_val);
                     GOTO(exception);
                 }
-                sp[-1] = ret_val;
+                sp[-1] = _ret_val;
                 BREAK;
             }
 
@@ -20159,9 +20263,20 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                                   (int)(pc - b->byte_code_buf - 1), opcode);
             GOTO(exception);
         }
-        }
-    }
+
+#if !TAIL_CALL_DISPATCH
+        }  /* SWITCH(pc) */
+    }  /* for(;;) */
+    goto exception;
+#endif
+
+#if TAIL_CALL_DISPATCH
+ LABEL_FUNC(exception) BEGIN_BRACE
+    JSRuntime *rt = caller_ctx->rt;
+    JSValue *stack_buf = sf->var_buf + b->var_count;
+#else
  exception:
+#endif
     if (is_backtrace_needed(ctx, rt->current_exception)) {
         /* add the backtrace information now (it is not done
            before if the exception happens in a bytecode
@@ -20194,11 +20309,21 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
        case. Hence the label 'done' should never be reached in a
        generator function. */
     if (b->func_kind != JS_FUNC_NORMAL) {
-    done_generator:
-        sf->cur_pc = pc;
-        sf->cur_sp = sp;
+        GOTO(done_generator);
     } else {
-    done:
+        GOTO(done);
+    }
+
+#if TAIL_CALL_DISPATCH
+  restart: DISPATCH_NO_TAIL;
+ END_BRACE
+ LABEL_FUNC(done) BEGIN_BRACE
+    JSRuntime *rt = caller_ctx->rt;
+#else
+ done:
+#endif
+    {
+        JSValue *pval;
         if (unlikely(b->var_ref_count != 0)) {
             /* variable references reference the stack: must close them */
             close_var_refs(rt, b, sf);
@@ -20208,6 +20333,18 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
             JS_FreeValue(ctx, *pval);
         }
     }
+    rt->current_stack_frame = sf->prev_frame;
+    return ret_val;
+
+#if TAIL_CALL_DISPATCH
+ END_BRACE
+ LABEL_FUNC(done_generator) BEGIN_BRACE
+    JSRuntime *rt = caller_ctx->rt;
+#else
+ done_generator:
+#endif
+    sf->cur_pc = pc;
+    sf->cur_sp = sp;
     rt->current_stack_frame = sf->prev_frame;
     return ret_val;
 }

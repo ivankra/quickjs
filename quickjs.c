@@ -340,6 +340,7 @@ typedef struct JSStackFrame {
     JSContext *caller_ctx;
     JSValueConst new_target;
     JSValueConst this_obj;
+    JSValue ret_val;
     JSValue *local_buf;
     /* only used in generators. Current stack pointer value. NULL if
        the function is running. */
@@ -17360,7 +17361,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
     JSStackFrame sf_s, *sf = &sf_s;
     const uint8_t *pc;
     int opcode, arg_allocated_size, i;
-    JSValue *stack_buf, *var_buf, *arg_buf, *sp, ret_val, *pval;
+    JSValue *stack_buf, *var_buf, *arg_buf, *sp, *pval;
     JSVarRef **var_refs;
     size_t alloca_size;
 
@@ -17814,6 +17815,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
             int i;
             int call_argc = opcode - OP_call0;
             JSValue *call_argv = sp - call_argc;
+            JSValue ret_val;
             sf->cur_pc = pc;
             ret_val = JS_CallInternal(ctx, call_argv[-1], JS_UNDEFINED,
                                       JS_UNDEFINED, call_argc, call_argv, 0);
@@ -17832,14 +17834,17 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 int i;
                 int call_argc = get_u16(pc);
                 JSValue *call_argv = sp - call_argc;
+                JSValue ret_val;
                 pc += 2;
                 sf->cur_pc = pc;
                 ret_val = JS_CallInternal(ctx, call_argv[-1], JS_UNDEFINED,
                                           JS_UNDEFINED, call_argc, call_argv, 0);
                 if (unlikely(JS_IsException(ret_val)))
                     GOTO(exception);
-                if (opcode == OP_tail_call)
+                if (opcode == OP_tail_call) {
+                    sf->ret_val = ret_val;
                     GOTO(done);
+                }
                 for(i = -1; i < call_argc; i++)
                     JS_FreeValue(ctx, call_argv[i]);
                 sp -= call_argc + 1;
@@ -17850,6 +17855,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
             {
                 int call_argc = get_u16(pc), i;
                 JSValue *call_argv = sp - call_argc;
+                JSValue ret_val;
                 pc += 2;
                 sf->cur_pc = pc;
                 ret_val = JS_CallConstructorInternal(ctx, call_argv[-2],
@@ -17869,14 +17875,17 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 int i;
                 int call_argc = get_u16(pc);
                 JSValue *call_argv = sp - call_argc;
+                JSValue ret_val;
                 pc += 2;
                 sf->cur_pc = pc;
                 ret_val = JS_CallInternal(ctx, call_argv[-1], call_argv[-2],
                                           JS_UNDEFINED, call_argc, call_argv, 0);
                 if (unlikely(JS_IsException(ret_val)))
                     GOTO(exception);
-                if (opcode == OP_tail_call_method)
+                if (opcode == OP_tail_call_method) {
+                    sf->ret_val = ret_val;
                     GOTO(done);
+                }
                 for(i = -2; i < call_argc; i++)
                     JS_FreeValue(ctx, call_argv[i]);
                 sp -= call_argc + 2;
@@ -17885,6 +17894,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
             }
         CASE(OP_array_from) {
             int call_argc = get_u16(pc);
+            JSValue ret_val;
             pc += 2;
             ret_val = js_create_array_free(ctx, call_argc, sp - call_argc);
             sp -= call_argc;
@@ -17896,6 +17906,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
 
         CASE(OP_apply)
             {
+                JSValue ret_val;
                 int magic;
                 magic = get_u16(pc);
                 pc += 2;
@@ -17912,11 +17923,11 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 BREAK;
             }
         CASE(OP_return) {
-            ret_val = *--sp;
+            sf->ret_val = *--sp;
             GOTO(done);
         }
         CASE(OP_return_undef) {
-            ret_val = JS_UNDEFINED;
+            sf->ret_val = JS_UNDEFINED;
             GOTO(done);
         }
 
@@ -18021,6 +18032,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 int scope_idx, i;
                 int call_argc = get_u16(pc);
                 JSValue *call_argv = sp - call_argc;
+                JSValue ret_val;
                 scope_idx = get_u16(pc + 2) + ARG_SCOPE_END;
                 pc += 4;
                 sf->cur_pc = pc;
@@ -18050,6 +18062,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 uint32_t len;
                 JSValue *tab;
                 JSValueConst obj;
+                JSValue ret_val;
 
                 scope_idx = get_u16(pc) + ARG_SCOPE_END;
                 pc += 2;
@@ -19130,11 +19143,11 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                             GOTO(exception);
                         }
                         sf->cur_pc = pc;
-                        ret_val = JS_ToPropertyKey(ctx, sp[-1]);
-                        if (JS_IsException(ret_val))
+                        val = JS_ToPropertyKey(ctx, sp[-1]);
+                        if (JS_IsException(val))
                             GOTO(exception);
                         JS_FreeValue(ctx, sp[-1]);
-                        sp[-1] = ret_val;
+                        sp[-1] = val;
                         break;
                     }
                     sf->cur_pc = pc;
@@ -19939,6 +19952,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
 
         CASE(OP_to_object) {
             if (JS_VALUE_GET_TAG(sp[-1]) != JS_TAG_OBJECT) {
+                JSValue ret_val;
                 sf->cur_pc = pc;
                 ret_val = JS_ToObject(ctx, sp[-1]);
                 if (JS_IsException(ret_val))
@@ -19950,6 +19964,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
         }
 
         CASE(OP_to_propkey) {
+            JSValue ret_val;
             switch (JS_VALUE_GET_TAG(sp[-1])) {
             case JS_TAG_INT:
             case JS_TAG_STRING:
@@ -19969,6 +19984,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
 
 #if 0
         CASE(OP_to_string) {
+            JSValue ret_val;
             if (JS_VALUE_GET_TAG(sp[-1]) != JS_TAG_STRING) {
                 ret_val = JS_ToString(ctx, sp[-1]);
                 if (JS_IsException(ret_val))
@@ -20082,24 +20098,24 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
             }
 
         CASE(OP_await) {
-            ret_val = JS_NewInt32(ctx, FUNC_RET_AWAIT);
+            sf->ret_val = JS_NewInt32(ctx, FUNC_RET_AWAIT);
             GOTO(done_generator);
         }
         CASE(OP_yield) {
-            ret_val = JS_NewInt32(ctx, FUNC_RET_YIELD);
+            sf->ret_val = JS_NewInt32(ctx, FUNC_RET_YIELD);
             GOTO(done_generator);
         }
         CASE_FALLTHROUGH(OP_yield_star, OP_async_yield_star)
         CASE(OP_async_yield_star) {
-            ret_val = JS_NewInt32(ctx, FUNC_RET_YIELD_STAR);
+            sf->ret_val = JS_NewInt32(ctx, FUNC_RET_YIELD_STAR);
             GOTO(done_generator);
         }
         CASE(OP_return_async) {
-            ret_val = JS_UNDEFINED;
+            sf->ret_val = JS_UNDEFINED;
             GOTO(done_generator);
         }
         CASE(OP_initial_yield) {
-            ret_val = JS_NewInt32(ctx, FUNC_RET_INITIAL_YIELD);
+            sf->ret_val = JS_NewInt32(ctx, FUNC_RET_INITIAL_YIELD);
             GOTO(done_generator);
         }
 
@@ -20194,7 +20210,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
             }
         }
     }
-    ret_val = JS_EXCEPTION;
+    sf->ret_val = JS_EXCEPTION;
     /* the local variables are freed by the caller in the generator
        case. Hence the label 'done' should never be reached in a
        generator function. */
@@ -20214,7 +20230,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
         }
     }
     rt->current_stack_frame = sf->prev_frame;
-    return ret_val;
+    return sf->ret_val;
 }
 
 JSValue JS_Call(JSContext *ctx, JSValueConst func_obj, JSValueConst this_obj,

@@ -337,6 +337,7 @@ typedef struct JSStackFrame {
     /* Temps used only during JS_CallInternal()'s interpreter loop. */
     int argc;
     JSValue *argv;
+    JSContext *caller_ctx;
     JSValue *local_buf;
     /* only used in generators. Current stack pointer value. NULL if
        the function is running. */
@@ -17448,6 +17449,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
     sf->arg_count = argc;
     sf->argc = argc;
     sf->argv = arg_buf = argv;
+    sf->caller_ctx = caller_ctx;
 
     sf->local_buf = var_buf = alloca(alloca_size);
     if (unlikely(arg_allocated_size)) {
@@ -17917,7 +17919,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
             /* return TRUE if 'this' should be returned */
             if (!JS_IsObject(sp[-1])) {
                 if (!JS_IsUndefined(sp[-1])) {
-                    JS_ThrowTypeError(caller_ctx, "derived class constructor must return an object or undefined");
+                    JS_ThrowTypeError(sf->caller_ctx, "derived class constructor must return an object or undefined");
                     GOTO(exception);
                 }
                 sp[0] = JS_TRUE;
@@ -18368,7 +18370,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 idx = get_u16(pc);
                 pc += 2;
                 if (unlikely(JS_IsUninitialized(var_buf[idx]))) {
-                    JS_ThrowReferenceErrorUninitialized2(caller_ctx, b, idx, FALSE);
+                    JS_ThrowReferenceErrorUninitialized2(sf->caller_ctx, b, idx, FALSE);
                     GOTO(exception);
                 }
                 sp[0] = JS_DupValue(ctx, var_buf[idx]);
@@ -18435,7 +18437,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 pr = add_property(ctx, JS_VALUE_GET_OBJ(sp[-1]), atom,
                                   JS_PROP_WRITABLE | JS_PROP_VARREF);
                 if (!pr) {
-                    JSRuntime *rt = caller_ctx->rt;
+                    JSRuntime *rt = sf->caller_ctx->rt;
                     free_var_ref(rt, var_ref);
                     GOTO(exception);
                 }

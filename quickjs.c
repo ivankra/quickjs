@@ -339,6 +339,7 @@ typedef struct JSStackFrame {
     JSValue *argv;
     JSContext *caller_ctx;
     JSValueConst new_target;
+    JSValueConst this_obj;
     JSValue *local_buf;
     /* only used in generators. Current stack pointer value. NULL if
        the function is running. */
@@ -17397,6 +17398,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
             /* func_obj get contains a pointer to JSFuncAsyncState */
             /* the stack frame is already allocated */
             sf = &s->frame;
+            sf->this_obj = this_obj;
             p = JS_VALUE_GET_OBJ(sf->cur_func);
             b = p->u.func.function_bytecode;
             ctx = b->realm;
@@ -17431,6 +17433,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
 
     sf->cur_func = (JSValue)func_obj;
     sf->new_target = new_target;
+    sf->this_obj = this_obj;
 
     b = p->u.func.function_bytecode;
     var_refs = p->u.func.var_refs;
@@ -17554,19 +17557,19 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
             {
                 JSValue val;
                 if (!(b->js_mode & JS_MODE_STRICT)) {
-                    uint32_t tag = JS_VALUE_GET_TAG(this_obj);
+                    uint32_t tag = JS_VALUE_GET_TAG(sf->this_obj);
                     if (likely(tag == JS_TAG_OBJECT))
                         goto normal_this;
                     if (tag == JS_TAG_NULL || tag == JS_TAG_UNDEFINED) {
                         val = JS_DupValue(ctx, ctx->global_obj);
                     } else {
-                        val = JS_ToObject(ctx, this_obj);
+                        val = JS_ToObject(ctx, sf->this_obj);
                         if (JS_IsException(val))
                             GOTO(exception);
                     }
                 } else {
                 normal_this:
-                    val = JS_DupValue(ctx, this_obj);
+                    val = JS_DupValue(ctx, sf->this_obj);
                 }
                 *sp++ = val;
                 BREAK;

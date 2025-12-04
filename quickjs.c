@@ -335,6 +335,8 @@ typedef struct JSStackFrame {
     int arg_count;
     int js_mode; /* not supported for C functions */
     /* Temps used only during JS_CallInternal()'s interpreter loop. */
+    int argc;
+    JSValue *argv;
     JSValue *local_buf;
     /* only used in generators. Current stack pointer value. NULL if
        the function is running. */
@@ -17443,8 +17445,9 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
         return JS_ThrowStackOverflow(caller_ctx);
 
     sf->js_mode = b->js_mode;
-    arg_buf = argv;
     sf->arg_count = argc;
+    sf->argc = argc;
+    sf->argv = arg_buf = argv;
 
     sf->local_buf = var_buf = alloca(alloca_size);
     if (unlikely(arg_allocated_size)) {
@@ -17583,13 +17586,13 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 int arg = *pc++;
                 switch(arg) {
                 case OP_SPECIAL_OBJECT_ARGUMENTS:
-                    *sp++ = js_build_arguments(ctx, argc, (JSValueConst *)argv);
+                    *sp++ = js_build_arguments(ctx, sf->argc, (JSValueConst *)sf->argv);
                     if (unlikely(JS_IsException(sp[-1])))
                         GOTO(exception);
                     break;
                 case OP_SPECIAL_OBJECT_MAPPED_ARGUMENTS:
-                    *sp++ = js_build_mapped_arguments(ctx, argc, (JSValueConst *)argv,
-                                                      sf, min_int(argc, b->arg_count));
+                    *sp++ = js_build_mapped_arguments(ctx, sf->argc, (JSValueConst *)sf->argv,
+                                                      sf, min_int(sf->argc, b->arg_count));
                     if (unlikely(JS_IsException(sp[-1])))
                         GOTO(exception);
                     break;
@@ -17628,8 +17631,8 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
             {
                 int first = get_u16(pc);
                 pc += 2;
-                first = min_int(first, argc);
-                *sp++ = js_create_array(ctx, argc - first, (JSValueConst *)(argv + first));
+                first = min_int(first, sf->argc);
+                *sp++ = js_create_array(ctx, sf->argc - first, (JSValueConst *)(sf->argv + first));
                 if (unlikely(JS_IsException(sp[-1])))
                     GOTO(exception);
                 BREAK;
@@ -17942,7 +17945,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 super = JS_GetPrototype(ctx, sf->cur_func);
                 if (JS_IsException(super))
                     GOTO(exception);
-                ret = JS_CallConstructor2(ctx, super, new_target, argc, (JSValueConst *)argv);
+                ret = JS_CallConstructor2(ctx, super, new_target, sf->argc, (JSValueConst *)sf->argv);
                 JS_FreeValue(ctx, super);
                 if (JS_IsException(ret))
                     GOTO(exception);

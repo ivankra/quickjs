@@ -17598,8 +17598,8 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                     break;
                 case OP_SPECIAL_OBJECT_HOME_OBJECT:
                     {
-                        JSObject *p1;
-                        p1 = p->u.func.home_object;
+                        JSObject *p1 = JS_VALUE_GET_OBJ(sf->cur_func);
+                        p1 = p1->u.func.home_object;
                         if (unlikely(!p1))
                             *sp++ = JS_UNDEFINED;
                         else
@@ -17930,6 +17930,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
         }
         CASE(OP_init_ctor)
             {
+                JSValue func_obj = sf->cur_func;
                 JSValue super, ret;
                 sf->cur_pc = pc;
                 if (JS_IsUndefined(new_target)) {
@@ -18432,6 +18433,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 pr = add_property(ctx, JS_VALUE_GET_OBJ(sp[-1]), atom,
                                   JS_PROP_WRITABLE | JS_PROP_VARREF);
                 if (!pr) {
+                    JSRuntime *rt = caller_ctx->rt;
                     free_var_ref(rt, var_ref);
                     GOTO(exception);
                 }
@@ -18669,6 +18671,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
         }
         CASE(OP_nip_catch)
             {
+                JSValue *stack_buf = sf->var_buf + b->var_count;
                 JSValue ret_val;
                 /* catch_offset ... ret_val -> ret_eval */
                 ret_val = *--sp;

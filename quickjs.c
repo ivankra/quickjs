@@ -348,6 +348,8 @@ typedef struct JSStackFrame {
     /* Temps used only during JS_CallInternal()'s interpreter loop. */
     JSContext *caller_ctx;
     JSValueConst new_target;
+    int argc;
+    JSValue *argv;
     JSValue *local_buf;
 } JSStackFrame;
 
@@ -17354,7 +17356,7 @@ typedef enum {
 #define FUNC_RET_INITIAL_YIELD 3
 
 #if TAIL_CALL_DISPATCH
-#define TAIL_CALL_ARGS(pc) pc, sp, b, ctx, var_buf, arg_buf, var_refs, sf, ret_val, this_obj, argc, argv
+#define TAIL_CALL_ARGS(pc) pc, sp, b, ctx, var_buf, arg_buf, var_refs, sf, ret_val, this_obj
 #define TAIL_CALL_PARAMS \
      const uint8_t *pc, \
      JSValue *sp, \
@@ -17365,9 +17367,7 @@ typedef enum {
      JSVarRef **var_refs, \
      JSStackFrame *sf, \
      JSValue ret_val, \
-     JSValueConst this_obj, \
-     int argc, \
-     JSValue *argv
+     JSValueConst this_obj
 
 /* With tail-call dispatch, each CASE and exception/done/done_generator blocks
    become js_OP_<id> and JS_CallInternal_<label> functions with this signature */
@@ -17490,6 +17490,8 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
             sf = &s->frame;
             sf->caller_ctx = caller_ctx;
             sf->new_target = new_target;
+            sf->argc = argc;
+            sf->argv = argv;
             p = JS_VALUE_GET_OBJ(sf->cur_func);
             b = p->u.func.function_bytecode;
             ctx = b->realm;
@@ -17569,6 +17571,8 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
     ctx = b->realm; /* set the current realm */
     sf->caller_ctx = caller_ctx;
     sf->new_target = new_target;
+    sf->argc = argc;
+    sf->argv = argv;
 
 #if TAIL_CALL_DISPATCH
  restart: DISPATCH_NO_TAIL;
@@ -17689,13 +17693,13 @@ END_BRACE  /* ends JS_CallInternal() */
                 int arg = *pc++;
                 switch(arg) {
                 case OP_SPECIAL_OBJECT_ARGUMENTS:
-                    *sp++ = js_build_arguments(ctx, argc, (JSValueConst *)argv);
+                    *sp++ = js_build_arguments(ctx, sf->argc, (JSValueConst *)sf->argv);
                     if (unlikely(JS_IsException(sp[-1])))
                         GOTO(exception);
                     break;
                 case OP_SPECIAL_OBJECT_MAPPED_ARGUMENTS:
-                    *sp++ = js_build_mapped_arguments(ctx, argc, (JSValueConst *)argv,
-                                                      sf, min_int(argc, b->arg_count));
+                    *sp++ = js_build_mapped_arguments(ctx, sf->argc, (JSValueConst *)sf->argv,
+                                                      sf, min_int(sf->argc, b->arg_count));
                     if (unlikely(JS_IsException(sp[-1])))
                         GOTO(exception);
                     break;
@@ -17734,8 +17738,8 @@ END_BRACE  /* ends JS_CallInternal() */
             {
                 int first = get_u16(pc);
                 pc += 2;
-                first = min_int(first, argc);
-                *sp++ = js_create_array(ctx, argc - first, (JSValueConst *)(argv + first));
+                first = min_int(first, sf->argc);
+                *sp++ = js_create_array(ctx, sf->argc - first, (JSValueConst *)(sf->argv + first));
                 if (unlikely(JS_IsException(sp[-1])))
                     GOTO(exception);
                 BREAK;
@@ -18049,7 +18053,7 @@ END_BRACE  /* ends JS_CallInternal() */
                 super = JS_GetPrototype(ctx, func_obj);
                 if (JS_IsException(super))
                     GOTO(exception);
-                ret = JS_CallConstructor2(ctx, super, sf->new_target, argc, (JSValueConst *)argv);
+                ret = JS_CallConstructor2(ctx, super, sf->new_target, sf->argc, (JSValueConst *)sf->argv);
                 JS_FreeValue(ctx, super);
                 if (JS_IsException(ret))
                     GOTO(exception);

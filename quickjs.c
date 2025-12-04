@@ -334,6 +334,8 @@ typedef struct JSStackFrame {
                         instruction after the call */
     int arg_count;
     int js_mode; /* not supported for C functions */
+    /* Temps used only during JS_CallInternal()'s interpreter loop. */
+    JSValue *local_buf;
     /* only used in generators. Current stack pointer value. NULL if
        the function is running. */
     JSValue *cur_sp;
@@ -17353,7 +17355,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
     JSStackFrame sf_s, *sf = &sf_s;
     const uint8_t *pc;
     int opcode, arg_allocated_size, i;
-    JSValue *local_buf, *stack_buf, *var_buf, *arg_buf, *sp, ret_val, *pval;
+    JSValue *stack_buf, *var_buf, *arg_buf, *sp, ret_val, *pval;
     JSVarRef **var_refs;
     size_t alloca_size;
 
@@ -17395,7 +17397,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
             b = p->u.func.function_bytecode;
             ctx = b->realm;
             var_refs = p->u.func.var_refs;
-            local_buf = arg_buf = sf->arg_buf;
+            sf->local_buf = arg_buf = sf->arg_buf;
             var_buf = sf->var_buf;
             stack_buf = sf->var_buf + b->var_count;
             sp = sf->cur_sp;
@@ -17444,17 +17446,17 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
     arg_buf = argv;
     sf->arg_count = argc;
 
-    local_buf = alloca(alloca_size);
+    sf->local_buf = var_buf = alloca(alloca_size);
     if (unlikely(arg_allocated_size)) {
         int n = min_int(argc, b->arg_count);
-        arg_buf = local_buf;
+        arg_buf = sf->local_buf;
         for(i = 0; i < n; i++)
             arg_buf[i] = JS_DupValue(caller_ctx, argv[i]);
         for(; i < b->arg_count; i++)
             arg_buf[i] = JS_UNDEFINED;
         sf->arg_count = b->arg_count;
+        var_buf += arg_allocated_size;
     }
-    var_buf = local_buf + arg_allocated_size;
     sf->var_buf = var_buf;
     sf->arg_buf = arg_buf;
 
@@ -20197,7 +20199,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
             close_var_refs(rt, b, sf);
         }
         /* free the local variables and stack */
-        for(pval = local_buf; pval < sp; pval++) {
+        for(pval = sf->local_buf; pval < sp; pval++) {
             JS_FreeValue(ctx, *pval);
         }
     }

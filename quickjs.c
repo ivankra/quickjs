@@ -347,6 +347,7 @@ typedef struct JSStackFrame {
     JSValue *cur_sp;
     /* Temps used only during JS_CallInternal()'s interpreter loop. */
     JSContext *caller_ctx;
+    JSValueConst new_target;
     JSValue *local_buf;
 } JSStackFrame;
 
@@ -17353,7 +17354,7 @@ typedef enum {
 #define FUNC_RET_INITIAL_YIELD 3
 
 #if TAIL_CALL_DISPATCH
-#define TAIL_CALL_ARGS(pc) pc, sp, b, ctx, var_buf, arg_buf, var_refs, sf, ret_val, this_obj, new_target, argc, argv
+#define TAIL_CALL_ARGS(pc) pc, sp, b, ctx, var_buf, arg_buf, var_refs, sf, ret_val, this_obj, argc, argv
 #define TAIL_CALL_PARAMS \
      const uint8_t *pc, \
      JSValue *sp, \
@@ -17365,7 +17366,6 @@ typedef enum {
      JSStackFrame *sf, \
      JSValue ret_val, \
      JSValueConst this_obj, \
-     JSValueConst new_target, \
      int argc, \
      JSValue *argv
 
@@ -17489,6 +17489,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
             /* the stack frame is already allocated */
             sf = &s->frame;
             sf->caller_ctx = caller_ctx;
+            sf->new_target = new_target;
             p = JS_VALUE_GET_OBJ(sf->cur_func);
             b = p->u.func.function_bytecode;
             ctx = b->realm;
@@ -17567,6 +17568,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
     rt->current_stack_frame = sf;
     ctx = b->realm; /* set the current realm */
     sf->caller_ctx = caller_ctx;
+    sf->new_target = new_target;
 
 #if TAIL_CALL_DISPATCH
  restart: DISPATCH_NO_TAIL;
@@ -17701,7 +17703,7 @@ END_BRACE  /* ends JS_CallInternal() */
                     *sp++ = JS_DupValue(ctx, sf->cur_func);
                     break;
                 case OP_SPECIAL_OBJECT_NEW_TARGET:
-                    *sp++ = JS_DupValue(ctx, new_target);
+                    *sp++ = JS_DupValue(ctx, sf->new_target);
                     break;
                 case OP_SPECIAL_OBJECT_HOME_OBJECT:
                     {
@@ -18029,7 +18031,7 @@ END_BRACE  /* ends JS_CallInternal() */
             BREAK;
         }
         CASE(OP_check_ctor) {
-            if (JS_IsUndefined(new_target)) {
+            if (JS_IsUndefined(sf->new_target)) {
                 JS_ThrowTypeError(ctx, "class constructors must be invoked with 'new'");
                 GOTO(exception);
             }
@@ -18040,14 +18042,14 @@ END_BRACE  /* ends JS_CallInternal() */
                 JSValue func_obj = sf->cur_func;
                 JSValue super, ret;
                 sf->cur_pc = pc;
-                if (JS_IsUndefined(new_target)) {
+                if (JS_IsUndefined(sf->new_target)) {
                     JS_ThrowTypeError(ctx, "class constructors must be invoked with 'new'");
                     GOTO(exception);
                 }
                 super = JS_GetPrototype(ctx, func_obj);
                 if (JS_IsException(super))
                     GOTO(exception);
-                ret = JS_CallConstructor2(ctx, super, new_target, argc, (JSValueConst *)argv);
+                ret = JS_CallConstructor2(ctx, super, sf->new_target, argc, (JSValueConst *)argv);
                 JS_FreeValue(ctx, super);
                 if (JS_IsException(ret))
                     GOTO(exception);

@@ -347,6 +347,7 @@ typedef struct JSStackFrame {
     JSValue *cur_sp;
     /* Temps used only during JS_CallInternal()'s interpreter loop. */
     JSContext *caller_ctx;
+    JSValueConst this_obj;
     JSValueConst new_target;
     int argc;
     JSValue *argv;
@@ -17356,7 +17357,7 @@ typedef enum {
 #define FUNC_RET_INITIAL_YIELD 3
 
 #if TAIL_CALL_DISPATCH
-#define TAIL_CALL_ARGS(pc) pc, sp, b, ctx, var_buf, arg_buf, var_refs, sf, ret_val, this_obj
+#define TAIL_CALL_ARGS(pc) pc, sp, b, ctx, var_buf, arg_buf, var_refs, sf, ret_val
 #define TAIL_CALL_PARAMS \
      const uint8_t *pc, \
      JSValue *sp, \
@@ -17366,8 +17367,7 @@ typedef enum {
      JSValue *arg_buf, \
      JSVarRef **var_refs, \
      JSStackFrame *sf, \
-     JSValue ret_val, \
-     JSValueConst this_obj
+     JSValue ret_val
 
 /* With tail-call dispatch, each CASE and exception/done/done_generator blocks
    become js_OP_<id> and JS_CallInternal_<label> functions with this signature */
@@ -17489,6 +17489,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
             /* the stack frame is already allocated */
             sf = &s->frame;
             sf->caller_ctx = caller_ctx;
+            sf->this_obj = this_obj;
             sf->new_target = new_target;
             sf->argc = argc;
             sf->argv = argv;
@@ -17570,6 +17571,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
     rt->current_stack_frame = sf;
     ctx = b->realm; /* set the current realm */
     sf->caller_ctx = caller_ctx;
+    sf->this_obj = this_obj;
     sf->new_target = new_target;
     sf->argc = argc;
     sf->argv = argv;
@@ -17657,19 +17659,19 @@ END_BRACE  /* ends JS_CallInternal() */
             {
                 JSValue val;
                 if (!(b->js_mode & JS_MODE_STRICT)) {
-                    uint32_t tag = JS_VALUE_GET_TAG(this_obj);
+                    uint32_t tag = JS_VALUE_GET_TAG(sf->this_obj);
                     if (likely(tag == JS_TAG_OBJECT))
                         goto normal_this;
                     if (tag == JS_TAG_NULL || tag == JS_TAG_UNDEFINED) {
                         val = JS_DupValue(ctx, ctx->global_obj);
                     } else {
-                        val = JS_ToObject(ctx, this_obj);
+                        val = JS_ToObject(ctx, sf->this_obj);
                         if (JS_IsException(val))
                             GOTO(exception);
                     }
                 } else {
                 normal_this:
-                    val = JS_DupValue(ctx, this_obj);
+                    val = JS_DupValue(ctx, sf->this_obj);
                 }
                 *sp++ = val;
                 BREAK;

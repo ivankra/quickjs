@@ -17422,7 +17422,11 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
         return call_func(caller_ctx, func_obj, this_obj, argc,
                          (JSValueConst *)argv, flags);
     }
+
+    sf->cur_func = (JSValue)func_obj;
+
     b = p->u.func.function_bytecode;
+    var_refs = p->u.func.var_refs;
 
     if (unlikely(argc < b->arg_count || (flags & JS_CALL_FLAG_COPY_ARGV))) {
         arg_allocated_size = b->arg_count;
@@ -17439,8 +17443,6 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
     sf->js_mode = b->js_mode;
     arg_buf = argv;
     sf->arg_count = argc;
-    sf->cur_func = (JSValue)func_obj;
-    var_refs = p->u.func.var_refs;
 
     local_buf = alloca(alloca_size);
     if (unlikely(arg_allocated_size)) {
@@ -17597,8 +17599,8 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                     break;
                 case OP_SPECIAL_OBJECT_HOME_OBJECT:
                     {
-                        JSObject *p1;
-                        p1 = p->u.func.home_object;
+                        JSObject *p1 = JS_VALUE_GET_OBJ(sf->cur_func);
+                        p1 = p1->u.func.home_object;
                         if (unlikely(!p1))
                             *sp++ = JS_UNDEFINED;
                         else
@@ -17935,7 +17937,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                     JS_ThrowTypeError(ctx, "class constructors must be invoked with 'new'");
                     GOTO(exception);
                 }
-                super = JS_GetPrototype(ctx, func_obj);
+                super = JS_GetPrototype(ctx, sf->cur_func);
                 if (JS_IsException(super))
                     GOTO(exception);
                 ret = JS_CallConstructor2(ctx, super, new_target, argc, (JSValueConst *)argv);
@@ -18428,6 +18430,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 pr = add_property(ctx, JS_VALUE_GET_OBJ(sp[-1]), atom,
                                   JS_PROP_WRITABLE | JS_PROP_VARREF);
                 if (!pr) {
+                    JSRuntime *rt = caller_ctx->rt;
                     free_var_ref(rt, var_ref);
                     GOTO(exception);
                 }
@@ -18665,6 +18668,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
         }
         CASE(OP_nip_catch)
             {
+                JSValue *stack_buf = sf->var_buf + b->var_count;
                 JSValue ret_val;
                 /* catch_offset ... ret_val -> ret_eval */
                 ret_val = *--sp;

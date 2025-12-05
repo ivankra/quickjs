@@ -1164,6 +1164,14 @@ void JS_PrintValue(JSContext *ctx, JSPrintValueWrite *write_func, void *write_op
 #undef js_unlikely
 #undef js_force_inline
 
+void quickomura_compile(JSContext *ctx, FILE *fo, JSValue func_obj);
+void quickomura_emit_table(JSContext *ctx, FILE *fo);
+
+#ifdef QUICKOMURA
+extern const uint8_t* quickomura_bytecodes;
+extern const void* quickomura_funcs;
+#endif
+
 #ifdef __cplusplus
 } /* extern "C" { */
 #endif

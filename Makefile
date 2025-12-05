@@ -1,3 +1,4 @@
+CONFIG_CLANG=y
 #
 # QuickJS Javascript Engine
 #
@@ -241,7 +242,7 @@ endif
 endif
 endif
 
-all: $(OBJDIR) $(OBJDIR)/quickjs.check.o $(OBJDIR)/qjs.check.o $(PROGS)
+all: $(OBJDIR) $(OBJDIR)/quickjs.check.o $(OBJDIR)/qjs.check.o $(OBJDIR)/quickjs.i $(PROGS)
 
 QJS_LIB_OBJS=$(OBJDIR)/quickjs.o $(OBJDIR)/dtoa.o $(OBJDIR)/libregexp.o $(OBJDIR)/libunicode.o $(OBJDIR)/cutils.o $(OBJDIR)/quickjs-libc.o
 
@@ -331,6 +332,12 @@ run-test262-debug: $(patsubst %.o, %.debug.o, $(OBJDIR)/run-test262.o $(QJS_LIB_
 
 $(OBJDIR)/%.o: %.c | $(OBJDIR)
 	$(CC) $(CFLAGS_OPT) -c -o $@ $<
+
+$(OBJDIR)/%.i: %.c | $(OBJDIR)
+	$(CC) $(CFLAGS) -DQUICKOMURA_PREPROCESS -E -c -o $@ $<
+
+quickomura-table.h: $(OBJDIR)/quickjs.i quickomura-parse.py
+	./quickomura-parse.py <$< >$@
 
 $(OBJDIR)/fuzz_%.o: fuzz/fuzz_%.c | $(OBJDIR)
 	$(CC) $(CFLAGS_OPT) -c -I. -o $@ $<

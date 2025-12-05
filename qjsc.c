@@ -366,6 +366,10 @@ static void compile_file(JSContext *ctx, FILE *fo,
             find_unique_cname(c_name, sizeof(c_name));
         }
     }
+    fprintf(fo, "#ifdef QUICKOMURA\n");
+    quickomura_compile(ctx, fo, obj);
+    quickomura_emit_table(ctx, fo);
+    fprintf(fo, "#endif\n\n");
     output_object_code(ctx, fo, obj, c_name, CNAME_TYPE_SCRIPT);
     JS_FreeValue(ctx, obj);
 }

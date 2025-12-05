@@ -512,6 +512,8 @@ struct JSContext {
                              const char *input, size_t input_len,
                              const char *filename, int flags, int scope_idx);
     void *user_opaque;
+
+    int quickomura_last_id;
 };
 
 typedef union JSFloat64Union {
@@ -671,6 +673,7 @@ typedef struct JSFunctionBytecode {
     JSValue *cpool; /* constant pool (self pointer) */
     int cpool_count;
     int closure_var_count;
+    int quickomura_id;
     struct {
         /* debug info, move to separate structure to save memory? */
         JSAtom filename;
@@ -35769,6 +35772,7 @@ static JSValue js_create_function(JSContext *ctx, JSFunctionDef *fd)
 
     b->byte_code_buf = (void *)((uint8_t*)b + byte_code_offset);
     b->byte_code_len = fd->byte_code.size;
+    b->quickomura_id = 0;
     memcpy(b->byte_code_buf, fd->byte_code.buf, fd->byte_code.size);
     js_free(ctx, fd->byte_code.buf);
     fd->byte_code.buf = NULL;
@@ -37486,6 +37490,7 @@ static int JS_WriteFunctionTag(BCWriterState *s, JSValueConst obj)
     bc_put_leb128(s, b->closure_var_count);
     bc_put_leb128(s, b->cpool_count);
     bc_put_leb128(s, b->byte_code_len);
+    bc_put_leb128(s, b->quickomura_id);
     if (b->vardefs) {
         bc_put_leb128(s, b->arg_count + b->var_count);
         for(i = 0; i < b->arg_count + b->var_count; i++) {
@@ -38419,6 +38424,8 @@ static JSValue JS_ReadFunctionTag(BCReaderState *s)
     if (bc_get_leb128_int(s, &bc.cpool_count))
         goto fail;
     if (bc_get_leb128_int(s, &bc.byte_code_len))
+        goto fail;
+    if (bc_get_leb128_int(s, &bc.quickomura_id))
         goto fail;
     if (bc_get_leb128_int(s, &local_count))
         goto fail;
@@ -59749,3 +59756,135 @@ int JS_AddIntrinsicWeakRef(JSContext *ctx)
     JS_FreeValue(ctx, obj);
     return 0;
 }
+
+#if !defined(QUICKOMURA_PREPROCESS) && !defined(CONFIG_CHECK_JSVALUE)
+#include "quickomura-table.h"
+
+/* Do not use opcode_info[i].size - that has temp opcodes */
+static const int quickomura_opcode_size[256] = {
+#define DEF(id, size, n_pop, n_push, f) size,
+#if SHORT_OPCODES
+#define def(id, size, n_pop, n_push, f)
+#else
+#define def(id, size, n_pop, n_push, f) size,
+#endif
+#include "quickjs-opcode.h"
+        [ OP_COUNT ... 255 ] = 0
+};
+
+void quickomura_compile(JSContext *ctx, FILE *fo, JSValue func_obj) {
+    JSFunctionBytecode *b;
+
+    if (JS_VALUE_GET_TAG(func_obj) == JS_TAG_MODULE) {
+        /* TODO: handle modules */
+        return;
+    } else {
+        assert(JS_VALUE_GET_TAG(func_obj) == JS_TAG_FUNCTION_BYTECODE);
+        b = JS_VALUE_GET_PTR(func_obj);
+    }
+
+    /* Compile child functions */
+    for (int i = 0; i < b->cpool_count; i++) {
+        JSValue val = b->cpool[i];
+        if (JS_VALUE_GET_TAG(val) == JS_TAG_FUNCTION_BYTECODE) {
+            quickomura_compile(ctx, fo, val);
+        }
+    }
+
+    if (b->quickomura_id != 0) {
+        return;
+    }
+
+    /* Don't compile very short functions */
+    if (b->byte_code_len <= 3) {
+        return;
+    }
+
+    b->quickomura_id = ++ctx->quickomura_last_id;
+
+    printf("quickomura_compile #%d: ", b->quickomura_id);
+    if (b->func_name != 0) {
+        printf(" name="); print_atom(ctx, b->func_name);
+    }
+    printf(" byte_code_len=%d\n", b->byte_code_len);
+
+    fprintf(fo, "static const uint8_t quickomura%d_bytecode[%d] = {", b->quickomura_id, b->byte_code_len);
+    for (int i = 0; i < b->byte_code_len; i++) {
+        fprintf(fo, i ? ",%u" : "%u", b->byte_code_buf[i]);
+    }
+    fprintf(fo, "};\n");
+    fprintf(fo, quickomura_signature, b->quickomura_id);
+    fprintf(fo, " {\n");
+    fprintf(fo, "  static const void* const pc_table[] = {");
+    for (int i = 0, pc = 0; i < b->byte_code_len; i++) {
+        if (i != pc) {
+            fprintf(fo, ",0");
+        } else {
+            fprintf(fo, "%s&&pc%d", i ? "," : "", i);
+            pc += quickomura_opcode_size[b->byte_code_buf[pc]];
+            assert(pc > i && pc <= b->byte_code_len);
+        }
+    }
+    fprintf(fo, "};\n");
+    fprintf(fo, "  goto *pc_table[pc_init - b->byte_code_buf];\n");
+    char last_dispatch = 0;
+    for (int pc = 0; pc != b->byte_code_len;) {
+        int opcode = b->byte_code_buf[pc];
+        fprintf(fo, "  pc%d: /*%s*/ {\n", pc, quickomura_opcodes[opcode].name);
+        if (quickomura_opcodes[opcode].need_pc) {
+            /* pc starts pointing at the next byte after opcode */ 
+            fprintf(fo, "    const uint8_t *pc = quickomura%d_bytecode + %d;\n", b->quickomura_id, pc + 1);
+        }
+        fprintf(fo, "    ");
+        for (const char *s = quickomura_opcodes[opcode].body; *s; s++) {
+            if (*s == '\n') {
+                fprintf(fo, "\n    ");
+            } else if (memcmp(s, "pcN_", 4) == 0) {
+                fprintf(fo, "pc%d_", pc);
+                s += 3;
+            } else {
+                fputc(*s, fo);
+            }
+        }
+        fprintf(fo, "\n");
+        if (quickomura_opcodes[opcode].dispatch == 'b') {
+            fprintf(fo, "    goto *pc_table[pc - quickomura%d_bytecode];\n", b->quickomura_id);
+        }
+        last_dispatch = quickomura_opcodes[opcode].dispatch;
+        fprintf(fo, "  }\n");
+        pc += quickomura_opcode_size[b->byte_code_buf[pc]];
+        assert(pc <= b->byte_code_len);
+    }
+    if (last_dispatch == 0) {
+        /* TODO abort compilation */
+        fprintf(fo, "  { const uint8_t *pc = quickomura%d_bytecode + %d; GOTO(exception); }\n", b->quickomura_id, b->byte_code_len);
+    }
+    fprintf(fo, "};\n\n");
+}
+
+void quickomura_emit_table(JSContext *ctx, FILE *fo) {
+    if (ctx->quickomura_last_id == 0) {
+        return;
+    }
+
+    fprintf(fo, "const uint8_t* quickomura_bytecodes[%d] = {0", ctx->quickomura_last_id + 1);
+    for (int i = 1; i <= ctx->quickomura_last_id; i++) {
+        fprintf(fo, ", quickomura%d_bytecode", i);
+    }
+    fprintf(fo, "};\n");
+
+    fprintf(fo, "const void* quickomura_funcs[%d] = {0", ctx->quickomura_last_id + 1);
+    for (int i = 1; i <= ctx->quickomura_last_id; i++) {
+        fprintf(fo, ", quickomura%d", i);
+    }
+    fprintf(fo, "};\n");
+}
+
+#if 1
+#include "quickomura-generated.h"
+#else
+const uint8_t* quickomura_bytecodes[1] = {0};
+const void* quickomura_funcs[1] = {0};
+#endif
+
+#endif

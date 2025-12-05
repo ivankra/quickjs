@@ -1,3 +1,4 @@
+CONFIG_CLANG=y
 #
 # QuickJS Javascript Engine
 #
@@ -216,9 +217,9 @@ else
 QJSC_CC=$(CC)
 QJSC=./qjsc$(EXE)
 endif
-PROGS+=libquickjs.a
+PROGS+=libquickjs.a libquickjsaot.a
 ifdef CONFIG_LTO
-PROGS+=libquickjs.lto.a
+PROGS+=libquickjs.lto.a libquickjsaot.lto.a
 endif
 
 # examples
@@ -241,9 +242,10 @@ endif
 endif
 endif
 
-all: $(OBJDIR) $(OBJDIR)/quickjs.check.o $(OBJDIR)/qjs.check.o $(PROGS)
+all: $(OBJDIR) $(OBJDIR)/quickjs.check.o $(OBJDIR)/qjs.check.o quickjs.i $(PROGS)
 
 QJS_LIB_OBJS=$(OBJDIR)/quickjs.o $(OBJDIR)/dtoa.o $(OBJDIR)/libregexp.o $(OBJDIR)/libunicode.o $(OBJDIR)/cutils.o $(OBJDIR)/quickjs-libc.o
+QJS_EX_OBJS=$(filter-out $(OBJDIR)/quickjs.o,$(QJS_LIB_OBJS))  # libquickjsaot: libquickjs excluding quickjs.o
 
 QJS_OBJS=$(OBJDIR)/qjs.o $(OBJDIR)/repl.o $(QJS_LIB_OBJS)
 
@@ -303,8 +305,14 @@ endif
 libquickjs$(LTOEXT).a: $(QJS_LIB_OBJS)
 	$(AR) rcs $@ $^
 
+libquickjsaot$(LTOEXT).a: $(QJS_EX_OBJS)
+	$(AR) rcs $@ $^
+
 ifdef CONFIG_LTO
 libquickjs.a: $(patsubst %.o, %.nolto.o, $(QJS_LIB_OBJS))
+	$(AR) rcs $@ $^
+
+libquickjsaot.a: $(patsubst %.o, %.nolto.o, $(QJS_EX_OBJS))
 	$(AR) rcs $@ $^
 endif # CONFIG_LTO
 
@@ -331,6 +339,14 @@ run-test262-debug: $(patsubst %.o, %.debug.o, $(OBJDIR)/run-test262.o $(QJS_LIB_
 
 $(OBJDIR)/%.o: %.c | $(OBJDIR)
 	$(CC) $(CFLAGS_OPT) -c -o $@ $<
+
+quickjs.i: quickjs.c | $(OBJDIR)
+	$(CC) $(CFLAGS_OPT) -DQUICKOMURA_PREPROCESS -E -c -o $@ $<
+
+aot-table.h: quickjs.i aot-parse.py
+	./aot-parse.py <$< >$@
+
+$(OBJDIR)/quickjs.o: aot-table.h
 
 $(OBJDIR)/fuzz_%.o: fuzz/fuzz_%.c | $(OBJDIR)
 	$(CC) $(CFLAGS_OPT) -c -I. -o $@ $<
@@ -367,6 +383,7 @@ clean:
 	rm -rf $(OBJDIR)/ *.dSYM/ qjs-debug$(EXE)
 	rm -rf run-test262-debug$(EXE)
 	rm -f run_octane run_sunspider_like
+	rm -f quickjs.i aot-gen* aot-table*
 
 install: all
 	mkdir -p "$(DESTDIR)$(PREFIX)/bin"

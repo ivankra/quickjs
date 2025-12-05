@@ -1,0 +1,6 @@
+#!/bin/bash -e
+SCRIPT_DIR=$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")
+if [[ "$1" == "" ]]; then echo "Usage: $0 script.js"; exit 1; fi
+TMP=/tmp/qjs-aot-$(basename "$1" | sed 's/[.]js$//')
+cmp -s "$1" "$TMP.js" || ("$SCRIPT_DIR"/qjsc -A -o "$TMP" "$1" && cp -f "$1" "$TMP.js")
+exec "$TMP"

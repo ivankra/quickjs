@@ -1164,6 +1164,12 @@ void JS_PrintValue(JSContext *ctx, JSPrintValueWrite *write_func, void *write_op
 #undef js_unlikely
 #undef js_force_inline
 
+void aot_compile(JSContext *ctx, FILE *fo, JSValue func_obj, int analyze_entry_points);
+void aot_emit_table(JSContext *ctx, FILE *fo);
+
+extern const uint8_t* aot_bytecodes[];
+extern const void* aot_funcs[];
+
 #ifdef __cplusplus
 } /* extern "C" { */
 #endif

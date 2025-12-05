@@ -61,6 +61,7 @@ static FILE *outfile;
 static BOOL byte_swap;
 static BOOL dynamic_export;
 static const char *c_ident_prefix = "qjsc_";
+static int enable_aot = 0;
 
 #define FE_ALL (-1)
 
@@ -366,6 +367,47 @@ static void compile_file(JSContext *ctx, FILE *fo,
             find_unique_cname(c_name, sizeof(c_name));
         }
     }
+
+    if (enable_aot) {
+        /* Serialize and deserialize in a fresh context matching runtime.
+           Needed to ensure JS_ReadFunctionBytecode won't change atom indexes and break compiled versions */
+        size_t out_buf_len;
+        uint8_t *out_buf = JS_WriteObject(ctx, &out_buf_len, obj, JS_WRITE_OBJ_BYTECODE);
+        assert(out_buf);
+        JSRuntime *rt2 = JS_NewRuntime();
+        assert(rt2);
+        js_std_init_handlers(rt2);
+        JS_SetModuleLoaderFunc2(rt2, NULL, js_module_loader, js_module_check_attributes, NULL);
+        JSContext *ctx2 = JS_NewContextRaw(rt2);
+        assert(ctx2);
+        JS_AddIntrinsicBaseObjects(ctx2);
+        JS_AddIntrinsicDate(ctx2);
+        JS_AddIntrinsicEval(ctx2);
+        JS_AddIntrinsicStringNormalize(ctx2);
+        JS_AddIntrinsicRegExp(ctx2);
+        JS_AddIntrinsicJSON(ctx2);
+        JS_AddIntrinsicProxy(ctx2);
+        JS_AddIntrinsicMapSet(ctx2);
+        JS_AddIntrinsicTypedArrays(ctx2);
+        JS_AddIntrinsicPromise(ctx2);
+        JS_AddIntrinsicWeakRef(ctx2);
+        js_std_add_helpers(ctx2, 0, NULL);
+        JSValue obj2 = JS_ReadObject(ctx2, out_buf, out_buf_len, JS_READ_OBJ_BYTECODE);
+        js_free(ctx, out_buf);
+        assert(!JS_IsException(obj2));
+
+        aot_compile(ctx2, fo, obj2, enable_aot == 'A');
+        aot_emit_table(ctx2, fo);
+        output_object_code(ctx2, fo, obj2, c_name, CNAME_TYPE_SCRIPT);
+
+        JS_FreeValue(ctx, obj);
+        JS_FreeValue(ctx2, obj2);
+        JS_FreeContext(ctx2);
+        js_std_free_handlers(rt2);
+        JS_FreeRuntime(rt2);
+        return;
+    }
+
     output_object_code(ctx, fo, obj, c_name, CNAME_TYPE_SCRIPT);
     JS_FreeValue(ctx, obj);
 }
@@ -407,6 +449,8 @@ void help(void)
            "-p prefix   set the prefix of the generated C names\n"
            "-S n        set the maximum stack size to 'n' bytes (default=%d)\n"
            "-s            strip all the debug info\n"
+           "-A          enable AOT compilation of bytecode functions to C code\n"
+           "-B          enable AOT compilation w/o entry point analysis\n"
            "--keep-source keep the source code\n",
            JS_DEFAULT_STACK_SIZE);
 #ifdef CONFIG_LTO
@@ -498,8 +542,8 @@ static int output_executable(const char *out_filename, const char *cfilename,
     if (dynamic_export)
         *arg++ = "-rdynamic";
     *arg++ = cfilename;
-    snprintf(libjsname, sizeof(libjsname), "%s/libquickjs%s%s.a",
-             lib_dir, bn_suffix, lto_suffix);
+    snprintf(libjsname, sizeof(libjsname), "%s/libquickjs%s%s%s.a",
+             lib_dir, enable_aot ? "aot" : "", bn_suffix, lto_suffix);
     *arg++ = libjsname;
     *arg++ = "-lm";
     *arg++ = "-ldl";
@@ -713,6 +757,10 @@ int main(int argc, char **argv)
                 strip_flags = JS_STRIP_DEBUG;
                 continue;
             }
+            if (opt == 'A' || opt == 'B') {
+                enable_aot = opt;
+                continue;
+            }
             if (!strcmp(longopt, "keep-source")) {
                 strip_flags = 0;
                 continue;
@@ -767,7 +815,10 @@ int main(int argc, char **argv)
             "\n"
             );
 
-    if (output_type != OUTPUT_C) {
+    if (enable_aot) {
+        fprintf(fo, "#include \"quickjs.i\"\n");
+        fprintf(fo, "#define NULL ((void*)0)\n\n");
+    } else if (output_type != OUTPUT_C) {
         fprintf(fo, "#include \"quickjs-libc.h\"\n"
                 "\n"
                 );

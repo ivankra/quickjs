@@ -512,6 +512,7 @@ struct JSContext {
                              const char *input, size_t input_len,
                              const char *filename, int flags, int scope_idx);
     void *user_opaque;
+    int aot_last_id;
 };
 
 typedef union JSFloat64Union {
@@ -671,6 +672,8 @@ typedef struct JSFunctionBytecode {
     JSValue *cpool; /* constant pool (self pointer) */
     int cpool_count;
     int closure_var_count;
+    int aot_id;
+    const void* aot_func;
     struct {
         /* debug info, move to separate structure to save memory? */
         JSAtom filename;
@@ -17577,7 +17580,10 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
     sf->argv = argv;
 
 #if TAIL_CALL_DISPATCH
- restart: DISPATCH_NO_TAIL;
+ restart:
+    if (likely(b->aot_func))
+        return ((JS_CallInternal_Handler)b->aot_func)(TAIL_CALL_ARGS(pc+1));
+    DISPATCH_NO_TAIL;
  exception: GOTO_NO_TAIL(exception);
 END_BRACE  /* ends JS_CallInternal() */
 
@@ -18604,9 +18610,9 @@ END_BRACE  /* ends JS_CallInternal() */
                 sp--;
                 if (res) {
                     pc += (int32_t)get_u32(pc - 4) - 4;
+                    if (unlikely(js_poll_interrupts(ctx)))
+                        GOTO(exception);
                 }
-                if (unlikely(js_poll_interrupts(ctx)))
-                    GOTO(exception);
                 BREAK;
             }
         CASE(OP_if_false)
@@ -18625,9 +18631,9 @@ END_BRACE  /* ends JS_CallInternal() */
                 sp--;
                 if (!res) {
                     pc += (int32_t)get_u32(pc - 4) - 4;
+                    if (unlikely(js_poll_interrupts(ctx)))
+                        GOTO(exception);
                 }
-                if (unlikely(js_poll_interrupts(ctx)))
-                    GOTO(exception);
                 BREAK;
             }
 #if SHORT_OPCODES
@@ -18646,9 +18652,9 @@ END_BRACE  /* ends JS_CallInternal() */
                 sp--;
                 if (res) {
                     pc += (int8_t)pc[-1] - 1;
+                    if (unlikely(js_poll_interrupts(ctx)))
+                        GOTO(exception);
                 }
-                if (unlikely(js_poll_interrupts(ctx)))
-                    GOTO(exception);
                 BREAK;
             }
         CASE(OP_if_false8)
@@ -18666,9 +18672,9 @@ END_BRACE  /* ends JS_CallInternal() */
                 sp--;
                 if (!res) {
                     pc += (int8_t)pc[-1] - 1;
+                    if (unlikely(js_poll_interrupts(ctx)))
+                        GOTO(exception);
                 }
-                if (unlikely(js_poll_interrupts(ctx)))
-                    GOTO(exception);
                 BREAK;
             }
 #endif
@@ -20326,7 +20332,10 @@ END_BRACE  /* ends JS_CallInternal() */
     }
 
 #if TAIL_CALL_DISPATCH
-  restart: DISPATCH_NO_TAIL;
+  restart:
+    if (likely(b->aot_func))
+        return ((JS_CallInternal_Handler)b->aot_func)(TAIL_CALL_ARGS(pc+1));
+    DISPATCH_NO_TAIL;
  END_BRACE
  LABEL_FUNC(done) BEGIN_BRACE
     JSRuntime *rt = sf->caller_ctx->rt;
@@ -37486,6 +37495,7 @@ static int JS_WriteFunctionTag(BCWriterState *s, JSValueConst obj)
     bc_put_leb128(s, b->closure_var_count);
     bc_put_leb128(s, b->cpool_count);
     bc_put_leb128(s, b->byte_code_len);
+    bc_put_leb128(s, b->aot_id);
     if (b->vardefs) {
         bc_put_leb128(s, b->arg_count + b->var_count);
         for(i = 0; i < b->arg_count + b->var_count; i++) {
@@ -38420,6 +38430,8 @@ static JSValue JS_ReadFunctionTag(BCReaderState *s)
         goto fail;
     if (bc_get_leb128_int(s, &bc.byte_code_len))
         goto fail;
+    if (bc_get_leb128_int(s, &bc.aot_id))
+        goto fail;
     if (bc_get_leb128_int(s, &local_count))
         goto fail;
 
@@ -38521,6 +38533,16 @@ static JSValue JS_ReadFunctionTag(BCReaderState *s)
         if (JS_ReadFunctionBytecode(s, b, byte_code_offset, b->byte_code_len))
             goto fail;
         bc_read_trace(s, "}\n");
+    }
+    if (b->aot_id) {
+        if (memcmp(b->byte_code_buf, aot_bytecodes[b->aot_id], b->byte_code_len) != 0) {
+            fprintf(stderr, "Bytecode mismatch for aot_id=%d len=%d\n", b->aot_id, b->byte_code_len);
+        } else {
+            static int c = 0;
+            if (c++ == 0) fprintf(stderr, "aot enabled\n");
+            b->byte_code_buf = (uint8_t *)aot_bytecodes[b->aot_id];
+            b->aot_func = aot_funcs[b->aot_id];
+        }
     }
     if (b->has_debug) {
         /* read optional debug information */
@@ -59749,3 +59771,194 @@ int JS_AddIntrinsicWeakRef(JSContext *ctx)
     JS_FreeValue(ctx, obj);
     return 0;
 }
+
+#if !defined(QUICKOMURA_PREPROCESS) && !defined(CONFIG_CHECK_JSVALUE)
+#include "aot-table.h"  /* aot_ops[], aot_sig_prefix, aot_sig_params */
+
+static const char* aot_opcode_names[256] = {
+#define DEF(id, size, n_pop, n_push, f) #id,
+#if SHORT_OPCODES
+#define def(id, size, n_pop, n_push, f)
+#else
+#define def(id, size, n_pop, n_push, f) #id,
+#endif
+#include "quickjs-opcode.h"
+        [ OP_COUNT ... 255 ] = 0
+};
+
+static void aot_print_func_name(JSContext *ctx, JSFunctionBytecode *b, FILE *fo) {
+    fprintf(fo, "aot%d", b->aot_id);
+    if (__JS_AtomIsTaggedInt(b->func_name) || b->func_name == JS_ATOM_NULL) return;
+    JSString *p = ctx->rt->atom_array[b->func_name];
+    if (!is_ascii_ident(p)) return;
+    fputc('_', fo);
+    for (int i = 0; i < p->len; i++) fputc(string_get(p, i), fo);
+}
+
+void aot_compile(JSContext *ctx, FILE *fo, JSValue func_obj, int analyze_entry_points) {
+    JSFunctionBytecode *b = JS_VALUE_GET_PTR(func_obj);
+    char *jump_target = NULL;
+    int need_pc_table = 1;
+
+    if (JS_VALUE_GET_TAG(func_obj) == JS_TAG_MODULE) return;  /* TODO: handle modules */
+    assert(JS_VALUE_GET_TAG(func_obj) == JS_TAG_FUNCTION_BYTECODE);
+
+    /* Compile child functions */
+    for (int i = 0; i < b->cpool_count; i++) {
+        JSValue val = b->cpool[i];
+        if (JS_VALUE_GET_TAG(val) == JS_TAG_FUNCTION_BYTECODE)
+            aot_compile(ctx, fo, val, analyze_entry_points);
+    }
+
+    if (b->aot_id != 0)
+        return;
+
+    /* Don't compile very short (little optimization benefit) or
+       very long functions (probably not hot) */
+    if (b->byte_code_len < 5 || b->byte_code_len > 10000)
+        return;
+
+    b->aot_id = ++ctx->aot_last_id;
+
+    /* Analyze possible jump points to avoid adding unnecessary labels that inhibit optimizations */
+    if (analyze_entry_points) {
+        jump_target = js_mallocz(ctx, b->byte_code_len + 1);
+        need_pc_table = 0;
+
+        for (int pc = 0, pc_next; pc != b->byte_code_len; pc = pc_next) {
+            int opcode = b->byte_code_buf[pc++], pc_jump = -42;
+
+            pc_next = pc + short_opcode_info(opcode).size - 1;
+            assert(pc_next >= pc && pc_next <= b->byte_code_len);
+
+            if (opcode == OP_goto8 || opcode == OP_if_true8 || opcode == OP_if_false8) {
+                pc_jump = pc + (int8_t)b->byte_code_buf[pc];
+            } else if (opcode == OP_goto16) {
+                pc_jump = pc + (int16_t)get_u16(b->byte_code_buf + pc);
+            } else if (opcode == OP_goto || opcode == OP_if_true || opcode == OP_if_false) {
+                pc_jump = pc + (int32_t)get_u32(b->byte_code_buf + pc);
+            } else if (opcode == OP_with_get_ref || opcode == OP_with_get_var || opcode == OP_with_put_var ||
+                       opcode == OP_with_delete_var || opcode == OP_with_make_ref) {
+                pc_jump = pc + (int32_t)get_u32(b->byte_code_buf + pc + 4) + 4;
+            } else if (opcode == OP_ret) {
+                need_pc_table = 1;
+            }
+            if (pc_jump != -42) {
+                assert(0 <= pc_jump && pc_jump < b->byte_code_len);
+                jump_target[pc_jump] |= 1;
+            }
+
+            if (opcode == OP_catch || opcode == OP_gosub) {
+                pc_jump = pc + (int32_t)get_u32(b->byte_code_buf + pc);
+                assert(0 <= pc_jump && pc_jump < b->byte_code_len);
+                jump_target[pc_jump] |= 2;  /* add to pc_table */
+                need_pc_table = 1;
+            }
+
+            if (aot_ops[opcode].done_generator) {
+                jump_target[pc_next] |= 2;  /* add to pc_table - external entry point */
+                need_pc_table = 1;
+            }
+        }
+    }
+
+    /* static const bytecode array required for constant folding */
+    fprintf(fo, "static const uint8_t aot%d_bytecode[%d] = {", b->aot_id, b->byte_code_len);
+    for (int i = 0; i < b->byte_code_len; i++)
+        fprintf(fo, i ? ",%u" : "%u", b->byte_code_buf[i]);
+    fprintf(fo, "};\n\n");
+
+    fprintf(fo, "%s ", aot_sig_prefix);
+    aot_print_func_name(ctx, b, fo);
+    fprintf(fo, "(%s) {\n", aot_sig_params);
+
+    /* pc_table and labels are indexed by opcode byte's offset, but the rest of the code
+       follows interpreter's convention: pc points at the *next* byte after opcode */
+    if (need_pc_table) {
+      fprintf(fo, "  static const void* const pc_table[] = {");
+      for (int i = 0, pc = 0; i < b->byte_code_len; i++) {
+          if (i == pc && (!analyze_entry_points || (jump_target[pc] & 2) == 2))
+              fprintf(fo, "%s&&pc%d", i ? "," : "", i);
+          else
+              fprintf(fo, "%s0", i ? "," : "");
+          if (i == pc)
+              pc += short_opcode_info(b->byte_code_buf[pc]).size;
+      }
+      fprintf(fo, "};\n");
+      fprintf(fo, "  if (__builtin_expect(!!(pc_init != aot%d_bytecode + 1), 0))\n", b->aot_id);
+      fprintf(fo, "    goto *pc_table[pc_init - aot%d_bytecode - 1];\n", b->aot_id);
+    }
+
+    for (int pc = 0, pc_next; pc < b->byte_code_len; pc = pc_next) {
+        int opcode = b->byte_code_buf[pc];
+        pc_next = pc + short_opcode_info(opcode).size;
+        assert(pc_next <= b->byte_code_len);
+        if (analyze_entry_points && !jump_target[pc])
+            fprintf(fo, "  /*pc%d:*/ /*%s*/ {\n", pc, aot_opcode_names[opcode]);
+        else
+            fprintf(fo, "  pc%d: /*%s*/ {\n", pc, aot_opcode_names[opcode]);
+        pc++;
+        if (aot_ops[opcode].needs_pc)
+            fprintf(fo, "    const uint8_t *pc = aot%d_bytecode + %d;\n", b->aot_id, pc);
+        fprintf(fo, "    ");
+        for (const char *s = aot_ops[opcode].body; *s; s++) {
+            if (memcmp(s, "pcN_", 4) == 0) {
+                fprintf(fo, "pc%d_", pc - 1);
+                s += 3;
+            } else if (memcmp(s, "b->byte_code_buf", 16) == 0) {
+                fprintf(fo, "aot%d_bytecode", b->aot_id);
+                s += 15;
+            /* Place conditional gotos in the conditional, fallthrough without goto by default */
+            } else if (*s == '}' && s[1] == 0 && (opcode == OP_if_true || opcode == OP_if_false)) {
+                fprintf(fo, "    goto pc%d;\n    }", pc + (int32_t)get_u32(b->byte_code_buf + pc));
+            } else if (*s == '}' && s[1] == 0 && (opcode == OP_if_true8 || opcode == OP_if_false8)) {
+                fprintf(fo, "    goto pc%d;\n    }", pc + (int8_t)b->byte_code_buf[pc]);
+            } else if (memcmp(s, "pc += diff - 5;", 15) == 0) {  /* OP_with_get_ref */
+                fprintf(fo, "    goto pc%d;\n", pc + (int32_t)get_u32(b->byte_code_buf + pc + 4) + 4);
+                s += 14;
+            } else if (*s == '\n') {
+                fprintf(fo, "\n    ");
+            } else {
+                fputc(*s, fo);
+            }
+        }
+        fprintf(fo, "\n");
+        if (opcode == OP_goto8) {
+            fprintf(fo, "    goto pc%d;\n", pc + (int8_t)b->byte_code_buf[pc]);
+        } else if (opcode == OP_goto16) {
+            fprintf(fo, "    goto pc%d;\n", pc + (int16_t)get_u16(b->byte_code_buf + pc));
+        } else if (opcode == OP_goto || opcode == OP_gosub) {
+            fprintf(fo, "    goto pc%d;\n", pc + (int32_t)get_u32(b->byte_code_buf + pc));
+        } else if (opcode == OP_ret) {
+            fprintf(fo, "    goto *pc_table[pc - aot%d_bytecode];\n", b->aot_id);
+        }
+        fprintf(fo, "  }\n");
+    }
+    fprintf(fo, "  exit(42);\n");
+    fprintf(fo, "};\n");
+    fprintf(fo, "#define aot%d ", b->aot_id);
+    aot_print_func_name(ctx, b, fo);
+    fprintf(fo, "\n\n");
+
+    if (jump_target) js_free(ctx, jump_target);
+}
+
+void aot_emit_table(JSContext *ctx, FILE *fo) {
+    if (ctx->aot_last_id != 0) {
+        fprintf(fo, "const uint8_t *aot_bytecodes[%d] = {0", ctx->aot_last_id + 1);
+        for (int i = 1; i <= ctx->aot_last_id; i++)
+            fprintf(fo, ", aot%d_bytecode", i);
+        fprintf(fo, "};\n");
+        fprintf(fo, "const void *aot_funcs[%d] = {0", ctx->aot_last_id + 1);
+        for (int i = 1; i <= ctx->aot_last_id; i++)
+            fprintf(fo, ", aot%d", i);
+        fprintf(fo, "};\n");
+    }
+}
+
+/* qjsc-compiled binary includes quickjs.c preprocessed with -DQUICKOMURA_PREPROCESS, so these will be gone */
+const uint8_t *aot_bytecodes[1] = {0};
+const void *aot_funcs[1] = {0};
+#else
+#include "quickjs-libc.h"
+#endif

@@ -280,6 +280,7 @@ static inline JSValue __JS_NewShortBigInt(JSContext *ctx, int64_t d)
 
 #define JS_VALUE_IS_BOTH_INT(v1, v2) ((JS_VALUE_GET_TAG(v1) | JS_VALUE_GET_TAG(v2)) == 0)
 #define JS_VALUE_IS_BOTH_FLOAT(v1, v2) (JS_TAG_IS_FLOAT64(JS_VALUE_GET_TAG(v1)) && JS_TAG_IS_FLOAT64(JS_VALUE_GET_TAG(v2)))
+#define JS_NORM_TAG_IS_BOTH_INT_OR_FLOAT(tag1, tag2) (((tag1) | (tag2) | JS_TAG_FLOAT64) == JS_TAG_FLOAT64)
 
 #define JS_VALUE_HAS_REF_COUNT(v) ((unsigned)JS_VALUE_GET_TAG(v) >= (unsigned)JS_TAG_FIRST)
 

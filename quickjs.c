@@ -14492,10 +14492,10 @@ static no_inline __exception int js_binary_arith_slow(JSContext *ctx, JSValue *s
     op2 = sp[-1];
     tag1 = JS_VALUE_GET_NORM_TAG(op1);
     tag2 = JS_VALUE_GET_NORM_TAG(op2);
-    /* fast path for float operations */
-    if (tag1 == JS_TAG_FLOAT64 && tag2 == JS_TAG_FLOAT64) {
-        d1 = JS_VALUE_GET_FLOAT64(op1);
-        d2 = JS_VALUE_GET_FLOAT64(op2);
+    /* fast path for mixed int/float. int/int handled by caller (except pow) */
+    if (JS_NORM_TAG_IS_BOTH_INT_OR_FLOAT(tag1, tag2)) {
+        d1 = tag1 == JS_TAG_INT ? JS_VALUE_GET_INT(op1) : JS_VALUE_GET_FLOAT64(op1);
+        d2 = tag2 == JS_TAG_INT ? JS_VALUE_GET_INT(op2) : JS_VALUE_GET_FLOAT64(op2);
         goto handle_float64;
     }
     /* fast path for short big int operations */
@@ -14683,11 +14683,10 @@ static no_inline __exception int js_add_slow(JSContext *ctx, JSValue *sp)
 
     tag1 = JS_VALUE_GET_NORM_TAG(op1);
     tag2 = JS_VALUE_GET_NORM_TAG(op2);
-    /* fast path for float64 */
-    if (tag1 == JS_TAG_FLOAT64 && tag2 == JS_TAG_FLOAT64) {
-        double d1, d2;
-        d1 = JS_VALUE_GET_FLOAT64(op1);
-        d2 = JS_VALUE_GET_FLOAT64(op2);
+    /* fast path for mixed int/float. int/int handled by caller */
+    if (JS_NORM_TAG_IS_BOTH_INT_OR_FLOAT(tag1, tag2)) {
+        double d1 = tag1 == JS_TAG_INT ? JS_VALUE_GET_INT(op1) : JS_VALUE_GET_FLOAT64(op1);
+        double d2 = tag2 == JS_TAG_INT ? JS_VALUE_GET_INT(op2) : JS_VALUE_GET_FLOAT64(op2);
         sp[-2] = __JS_NewFloat64(ctx, d1 + d2);
         return 0;
     }
@@ -15196,28 +15195,13 @@ static no_inline __exception int js_eq_slow(JSContext *ctx, JSValue *sp,
  redo:
     tag1 = JS_VALUE_GET_NORM_TAG(op1);
     tag2 = JS_VALUE_GET_NORM_TAG(op2);
-    if (tag_is_number(tag1) && tag_is_number(tag2)) {
-        if (tag1 == JS_TAG_INT && tag2 == JS_TAG_INT) {
-            res = JS_VALUE_GET_INT(op1) == JS_VALUE_GET_INT(op2);
-        } else if ((tag1 == JS_TAG_FLOAT64 &&
-                    (tag2 == JS_TAG_INT || tag2 == JS_TAG_FLOAT64)) ||
-                   (tag2 == JS_TAG_FLOAT64 &&
-                    (tag1 == JS_TAG_INT || tag1 == JS_TAG_FLOAT64))) {
-            double d1, d2;
-            if (tag1 == JS_TAG_FLOAT64) {
-                d1 = JS_VALUE_GET_FLOAT64(op1);
-            } else {
-                d1 = JS_VALUE_GET_INT(op1);
-            }
-            if (tag2 == JS_TAG_FLOAT64) {
-                d2 = JS_VALUE_GET_FLOAT64(op2);
-            } else {
-                d2 = JS_VALUE_GET_INT(op2);
-            }
-            res = (d1 == d2);
-        } else {
-            res = js_compare_bigint(ctx, OP_eq, op1, op2);
-        }
+    /* fast path for mixed int/float. int/int handled by caller */
+    if (JS_NORM_TAG_IS_BOTH_INT_OR_FLOAT(tag1, tag2)) {
+        double d1 = tag1 == JS_TAG_INT ? JS_VALUE_GET_INT(op1) : JS_VALUE_GET_FLOAT64(op1);
+        double d2 = tag2 == JS_TAG_INT ? JS_VALUE_GET_INT(op2) : JS_VALUE_GET_FLOAT64(op2);
+        res = (d1 == d2);
+    } else if (tag_is_number(tag1) && tag_is_number(tag2)) {
+        res = js_compare_bigint(ctx, OP_eq, op1, op2);
     } else if (tag1 == tag2) {
         res = js_strict_eq2(ctx, op1, op2, JS_EQ_STRICT);
     } else if ((tag1 == JS_TAG_NULL && tag2 == JS_TAG_UNDEFINED) ||

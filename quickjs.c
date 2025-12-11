@@ -14801,6 +14801,20 @@ static no_inline __exception int js_binary_logic_slow(JSContext *ctx,
     tag1 = JS_VALUE_GET_NORM_TAG(op1);
     tag2 = JS_VALUE_GET_NORM_TAG(op2);
 
+    if (JS_NORM_TAG_IS_BOTH_INT_OR_FLOAT(tag1, tag2)) {
+        if (tag1 == JS_TAG_INT) {
+           v1 = JS_VALUE_GET_INT(op1);
+        } else {
+           JS_ToInt32Free(ctx, (int32_t *)&v1, op1);
+        }
+        if (tag2 == JS_TAG_INT) {
+           v2 = JS_VALUE_GET_INT(op2);
+        } else {
+           JS_ToInt32Free(ctx, (int32_t *)&v2, op2);
+        }
+        goto handle_uint32;
+    }
+
     if (tag1 == JS_TAG_SHORT_BIG_INT && tag2 == JS_TAG_SHORT_BIG_INT) {
         js_slimb_t v1, v2, v;
         js_sdlimb_t vd;
@@ -14921,6 +14935,7 @@ static no_inline __exception int js_binary_logic_slow(JSContext *ctx,
         }
         if (unlikely(JS_ToInt32Free(ctx, (int32_t *)&v2, op2)))
             goto exception;
+    handle_uint32:
         switch(op) {
         case OP_shl:
             r = v1 << (v2 & 0x1f);

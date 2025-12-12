@@ -50,17 +50,28 @@
 #define OPTIMIZE         1
 #define SHORT_OPCODES    1
 #if defined(EMSCRIPTEN)
-#define DIRECT_DISPATCH     0
-#define TAIL_CALL_DISPATCH  0
-#elif __has_attribute(preserve_none) && __has_attribute(musttail)
-#warning Using tail-call dispatch
-#define DIRECT_DISPATCH     0
-#define TAIL_CALL_DISPATCH  1
-#define PRESERVE_NONE __attribute__((preserve_none))
-#define MUSTTAIL __attribute__((musttail))
+#define DIRECT_DISPATCH    0
+#define TAIL_CALL_DISPATCH 0
+#elif defined(TAIL_CALL_DISPATCH) && TAIL_CALL_DISPATCH == 1
+#define DIRECT_DISPATCH    0
 #else
 #define DIRECT_DISPATCH    1
 #define TAIL_CALL_DISPATCH 0
+#endif
+
+#if TAIL_CALL_DISPATCH
+#if __has_attribute(preserve_none)
+#define PRESERVE_NONE __attribute__((preserve_none))
+#else
+#error "preserve_none not supported, can't use tail-call dispatch"
+#endif
+#if defined(__clang__) && __has_attribute(musttail)
+#define MUSTTAIL __attribute__((musttail))
+#elif defined(__GNUC__) && __has_cpp_attribute(gnu::musttail)
+#define MUSTTAIL [[gnu::musttail]]
+#else
+#error "musttail not supported, can't use tail-call dispatch"
+#endif
 #endif
 
 #if defined(__APPLE__)
@@ -6824,7 +6835,11 @@ void JS_ComputeMemoryUsage(JSRuntime *rt, JSMemoryUsage *s)
 
 void JS_DumpMemoryUsage(FILE *fp, const JSMemoryUsage *s, JSRuntime *rt)
 {
+#if TAIL_CALL_DISPATCH
+    fprintf(fp, "QuickJS memory usage -- " CONFIG_VERSION " version with tail-call dispatch, %d-bit, malloc limit: %"PRId64"\n\n",
+#else
     fprintf(fp, "QuickJS memory usage -- " CONFIG_VERSION " version, %d-bit, malloc limit: %"PRId64"\n\n",
+#endif
             (int)sizeof(void *) * 8, s->malloc_limit);
 #if 1
     if (rt) {

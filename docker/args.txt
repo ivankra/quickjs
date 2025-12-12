@@ -1,0 +1,51 @@
+qjs-clang19-direct: --build-arg REV=b4e0e2cda5f855e05d7ec864f75ee212d648d1bb --build-arg BASE=jsz-clang19 -f quickjs.Dockerfile
+qjs-clang19-master: --build-arg REV=b22685617750e51d95f643d8eb1382dd09dd3bf1 --build-arg BASE=jsz-clang19 -f quickjs.Dockerfile
+qjs-clang19-tail:   --build-arg REV=b4e0e2cda5f855e05d7ec864f75ee212d648d1bb --build-arg BASE=jsz-clang19 --build-arg CFLAGS=-DTAIL_CALL_DISPATCH=1 -f quickjs.Dockerfile
+qjs-clang20-direct: --build-arg REV=b4e0e2cda5f855e05d7ec864f75ee212d648d1bb --build-arg BASE=jsz-clang20 -f quickjs.Dockerfile
+qjs-clang20-master: --build-arg REV=b22685617750e51d95f643d8eb1382dd09dd3bf1 --build-arg BASE=jsz-clang20 -f quickjs.Dockerfile
+qjs-clang20-tail:   --build-arg REV=b4e0e2cda5f855e05d7ec864f75ee212d648d1bb --build-arg BASE=jsz-clang20 --build-arg CFLAGS=-DTAIL_CALL_DISPATCH=1 -f quickjs.Dockerfile
+qjs-clang21-direct: --build-arg REV=b4e0e2cda5f855e05d7ec864f75ee212d648d1bb --build-arg BASE=jsz-clang21 -f quickjs.Dockerfile
+qjs-clang21-master: --build-arg REV=b22685617750e51d95f643d8eb1382dd09dd3bf1 --build-arg BASE=jsz-clang21 -f quickjs.Dockerfile
+qjs-clang21-tail:   --build-arg REV=b4e0e2cda5f855e05d7ec864f75ee212d648d1bb --build-arg BASE=jsz-clang21 --build-arg CFLAGS=-DTAIL_CALL_DISPATCH=1 -f quickjs.Dockerfile
+qjs-clang22-direct: --build-arg REV=b4e0e2cda5f855e05d7ec864f75ee212d648d1bb --build-arg BASE=jsz-clang22 -f quickjs.Dockerfile
+qjs-clang22-master: --build-arg REV=b22685617750e51d95f643d8eb1382dd09dd3bf1 --build-arg BASE=jsz-clang22 -f quickjs.Dockerfile
+qjs-clang22-tail:   --build-arg REV=b4e0e2cda5f855e05d7ec864f75ee212d648d1bb --build-arg BASE=jsz-clang22 --build-arg CFLAGS=-DTAIL_CALL_DISPATCH=1 -f quickjs.Dockerfile
+qjs-gcc14-direct:   --build-arg REV=b4e0e2cda5f855e05d7ec864f75ee212d648d1bb --build-arg BASE=jsz-gcc14 -f quickjs.Dockerfile
+qjs-gcc14-master:   --build-arg REV=b22685617750e51d95f643d8eb1382dd09dd3bf1 --build-arg BASE=jsz-gcc14 -f quickjs.Dockerfile
+qjs-gcc15-direct:   --build-arg REV=b4e0e2cda5f855e05d7ec864f75ee212d648d1bb --build-arg BASE=jsz-gcc15 -f quickjs.Dockerfile
+qjs-gcc15-master:   --build-arg REV=b22685617750e51d95f643d8eb1382dd09dd3bf1 --build-arg BASE=jsz-gcc15 -f quickjs.Dockerfile
+qjs-gcc16-direct:   --build-arg REV=b4e0e2cda5f855e05d7ec864f75ee212d648d1bb --build-arg BASE=jsz-gcc16 -f quickjs.Dockerfile
+qjs-gcc16-master:   --build-arg REV=b22685617750e51d95f643d8eb1382dd09dd3bf1 --build-arg BASE=jsz-gcc16 -f quickjs.Dockerfile
+qjs-gcc16-tail:     --build-arg REV=b4e0e2cda5f855e05d7ec864f75ee212d648d1bb --build-arg BASE=jsz-gcc16 --build-arg CFLAGS=-DTAIL_CALL_DISPATCH=1 -f quickjs.Dockerfile
+qjs-gcc16-o3-direct:   --build-arg REV=b4e0e2cda5f855e05d7ec864f75ee212d648d1bb --build-arg BASE=jsz-gcc16 --build-arg OPT=-O3 -f quickjs.Dockerfile
+qjs-gcc16-o3-master:   --build-arg REV=b22685617750e51d95f643d8eb1382dd09dd3bf1 --build-arg BASE=jsz-gcc16 --build-arg OPT=-O3 -f quickjs.Dockerfile
+qjs-gcc16-o3-tail:     --build-arg REV=b4e0e2cda5f855e05d7ec864f75ee212d648d1bb --build-arg BASE=jsz-gcc16 --build-arg CFLAGS=-DTAIL_CALL_DISPATCH=1 --build-arg OPT=-O3 -f quickjs.Dockerfile
+qjs-clang22-o3-direct: --build-arg REV=b4e0e2cda5f855e05d7ec864f75ee212d648d1bb --build-arg BASE=jsz-clang22 --build-arg OPT=-O3 -f quickjs.Dockerfile
+qjs-clang22-o3-master: --build-arg REV=b22685617750e51d95f643d8eb1382dd09dd3bf1 --build-arg BASE=jsz-clang22 --build-arg OPT=-O3 -f quickjs.Dockerfile
+qjs-clang22-o3-tail:   --build-arg REV=b4e0e2cda5f855e05d7ec864f75ee212d648d1bb --build-arg BASE=jsz-clang22 --build-arg CFLAGS=-DTAIL_CALL_DISPATCH=1 --build-arg OPT=-O3 -f quickjs.Dockerfile
+
+#tail2
+qjs00-b226856: --build-arg REV=b226856 --build-arg BASE=jsz-clang22 --build-arg CFLAGS=-DTAIL_CALL_DISPATCH=1 -f quickjs.Dockerfile
+qjs01-b8988ab: --build-arg REV=b8988ab --build-arg BASE=jsz-clang22 --build-arg CFLAGS=-DTAIL_CALL_DISPATCH=1 -f quickjs.Dockerfile
+qjs02-eaa7af8: --build-arg REV=eaa7af8 --build-arg BASE=jsz-clang22 --build-arg CFLAGS=-DTAIL_CALL_DISPATCH=1 -f quickjs.Dockerfile
+qjs03-54b6019: --build-arg REV=54b6019 --build-arg BASE=jsz-clang22 --build-arg CFLAGS=-DTAIL_CALL_DISPATCH=1 -f quickjs.Dockerfile
+qjs04-87f5df2: --build-arg REV=87f5df2 --build-arg BASE=jsz-clang22 --build-arg CFLAGS=-DTAIL_CALL_DISPATCH=1 -f quickjs.Dockerfile
+qjs05-8f656de: --build-arg REV=8f656de --build-arg BASE=jsz-clang22 --build-arg CFLAGS=-DTAIL_CALL_DISPATCH=1 -f quickjs.Dockerfile
+qjs06-1aaf523: --build-arg REV=1aaf523 --build-arg BASE=jsz-clang22 --build-arg CFLAGS=-DTAIL_CALL_DISPATCH=1 -f quickjs.Dockerfile
+qjs07-0f79258: --build-arg REV=0f79258 --build-arg BASE=jsz-clang22 --build-arg CFLAGS=-DTAIL_CALL_DISPATCH=1 -f quickjs.Dockerfile
+qjs08-84a35d2: --build-arg REV=84a35d2 --build-arg BASE=jsz-clang22 --build-arg CFLAGS=-DTAIL_CALL_DISPATCH=1 -f quickjs.Dockerfile
+qjs09-05b2d6d: --build-arg REV=05b2d6d --build-arg BASE=jsz-clang22 --build-arg CFLAGS=-DTAIL_CALL_DISPATCH=1 -f quickjs.Dockerfile
+qjs10-adcb226: --build-arg REV=adcb226 --build-arg BASE=jsz-clang22 --build-arg CFLAGS=-DTAIL_CALL_DISPATCH=1 -f quickjs.Dockerfile
+qjs11-bf5f35c: --build-arg REV=bf5f35c --build-arg BASE=jsz-clang22 --build-arg CFLAGS=-DTAIL_CALL_DISPATCH=1 -f quickjs.Dockerfile
+#qjs00-b226856 (origin/master, master) updated to unicode 17.0.0 - updated test262 version
+#qjs01-b8988ab Reformat CASE blocks for tail-call dispatch
+#qjs02-eaa7af8 Eliminate cross-CASE gotos
+#qjs03-54b6019 Eliminate call_argc, call_argv, i accesses
+#qjs04-87f5df2 Eliminate stack_buf, func_obj, rt, p accesses
+#qjs05-8f656de Eliminate local_buf
+#qjs06-1aaf523 Eliminate argc, argv
+#qjs07-0f79258 Eliminate caller_ctx
+#qjs08-84a35d2 Eliminate new_target
+#qjs09-05b2d6d Eliminate this_obj
+#qjs10-adcb226 Eliminate ret_val
+#qjs11-bf5f35c (HEAD -> tail2, origin/tail2) Implement tail-call dispatch

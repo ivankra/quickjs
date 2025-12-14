@@ -17360,13 +17360,13 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
     JSFunctionBytecode *b;
     JSStackFrame sf_s, *sf = &sf_s;
     const uint8_t *pc;
-    int opcode, arg_allocated_size, i;
+    int arg_allocated_size, i;
     JSValue *stack_buf, *var_buf, *arg_buf, *sp, *pval;
     JSVarRef **var_refs;
     size_t alloca_size;
 
 #if !DIRECT_DISPATCH
-#define SWITCH(pc)      switch (opcode = *pc++)
+#define SWITCH(pc)      switch (*pc++)
 #define CASE(op)        case op:
 #define CASE_FALLTHROUGH(op, target)  case op:
 #define DEFAULT         default:
@@ -17383,7 +17383,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
 #include "quickjs-opcode.h"
         [ OP_COUNT ... 255 ] = &&case_default
     };
-#define SWITCH(pc)      goto *dispatch_table[opcode = *pc++];
+#define SWITCH(pc)      goto *dispatch_table[*pc++];
 #define CASE(op)        case_ ## op:
 #define CASE_FALLTHROUGH(op, target)  case_ ## op:
 #define DEFAULT         case_default:
@@ -17503,18 +17503,15 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
             BREAK;
         }
 #if SHORT_OPCODES
-        CASE_FALLTHROUGH(OP_push_minus1, OP_push_7)
-        CASE_FALLTHROUGH(OP_push_0, OP_push_7)
-        CASE_FALLTHROUGH(OP_push_1, OP_push_7)
-        CASE_FALLTHROUGH(OP_push_2, OP_push_7)
-        CASE_FALLTHROUGH(OP_push_3, OP_push_7)
-        CASE_FALLTHROUGH(OP_push_4, OP_push_7)
-        CASE_FALLTHROUGH(OP_push_5, OP_push_7)
-        CASE_FALLTHROUGH(OP_push_6, OP_push_7)
-        CASE(OP_push_7) {
-            *sp++ = JS_NewInt32(ctx, opcode - OP_push_0);
-            BREAK;
-        }
+        CASE(OP_push_minus1) { *sp++ = JS_NewInt32(ctx, -1); BREAK; }
+        CASE(OP_push_0) { *sp++ = JS_NewInt32(ctx, 0); BREAK; }
+        CASE(OP_push_1) { *sp++ = JS_NewInt32(ctx, 1); BREAK; }
+        CASE(OP_push_2) { *sp++ = JS_NewInt32(ctx, 2); BREAK; }
+        CASE(OP_push_3) { *sp++ = JS_NewInt32(ctx, 3); BREAK; }
+        CASE(OP_push_4) { *sp++ = JS_NewInt32(ctx, 4); BREAK; }
+        CASE(OP_push_5) { *sp++ = JS_NewInt32(ctx, 5); BREAK; }
+        CASE(OP_push_6) { *sp++ = JS_NewInt32(ctx, 6); BREAK; }
+        CASE(OP_push_7) { *sp++ = JS_NewInt32(ctx, 7); BREAK; }
         CASE(OP_push_i8) {
             *sp++ = JS_NewInt32(ctx, get_i8(pc));
             pc += 1;
@@ -17812,6 +17809,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
         CASE_FALLTHROUGH(OP_call1, OP_call3)
         CASE_FALLTHROUGH(OP_call2, OP_call3)
         CASE(OP_call3) {
+            int opcode = pc[-1];
             int i;
             int call_argc = opcode - OP_call0;
             JSValue *call_argv = sp - call_argc;
@@ -17831,6 +17829,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
         CASE_FALLTHROUGH(OP_call, OP_tail_call)
         CASE(OP_tail_call)
             {
+                int opcode = pc[-1];
                 int i;
                 int call_argc = get_u16(pc);
                 JSValue *call_argv = sp - call_argc;
@@ -17872,6 +17871,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
         CASE_FALLTHROUGH(OP_call_method, OP_tail_call_method)
         CASE(OP_tail_call_method)
             {
+                int opcode = pc[-1];
                 int i;
                 int call_argc = get_u16(pc);
                 JSValue *call_argv = sp - call_argc;
@@ -18140,6 +18140,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                         JS_ThrowReferenceErrorUninitialized(ctx, cv->var_name);
                         GOTO(exception);
                     } else {
+                        int opcode = pc[-3];
                         sf->cur_pc = pc;
                         sp[0] = JS_GetPropertyInternal(ctx, ctx->global_obj,
                                                        cv->var_name,
@@ -18165,6 +18166,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
                 var_ref = var_refs[idx];
                 if (unlikely(JS_IsUninitialized(*var_ref->pvalue) ||
                              var_ref->is_const)) {
+                    int opcode = pc[-3];
                     JSClosureVar *cv = &b->closure_var[idx];
                     if (var_ref->is_lexical) {
                         if (opcode == OP_put_var_init)
@@ -18434,6 +18436,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
         CASE_FALLTHROUGH(OP_make_arg_ref, OP_make_var_ref_ref)
         CASE(OP_make_var_ref_ref)
             {
+                int opcode = pc[-1];
                 JSVarRef *var_ref;
                 JSProperty *pr;
                 JSAtom atom;
@@ -18992,6 +18995,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
         CASE_FALLTHROUGH(OP_define_method, OP_define_method_computed)
         CASE(OP_define_method_computed)
             {
+                int opcode = pc[-1];
                 JSValue getter, setter, value;
                 JSValueConst obj;
                 JSAtom atom;
@@ -19052,6 +19056,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
         CASE_FALLTHROUGH(OP_define_class, OP_define_class_computed)
         CASE(OP_define_class_computed)
             {
+                int opcode = pc[-1];
                 int class_flags;
                 JSAtom atom;
 
@@ -20001,6 +20006,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
         CASE_FALLTHROUGH(OP_with_make_ref, OP_with_get_ref)
         CASE(OP_with_get_ref)
             {
+                int opcode = pc[-1];
                 JSAtom atom;
                 int32_t diff;
                 JSValue obj, val;
@@ -20176,6 +20182,7 @@ static JSValue JS_CallInternal(JSContext *caller_ctx, JSValueConst func_obj,
 #endif
         CASE(OP_invalid)
         DEFAULT {
+            int opcode = pc[-1];
             JS_ThrowInternalError(ctx, "invalid opcode: pc=%u opcode=0x%02x",
                                   (int)(pc - b->byte_code_buf - 1), opcode);
             GOTO(exception);
